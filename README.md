@@ -3,14 +3,15 @@
 A Windows and macOS app for running and testing the OpenOne decision model locally (or against a remote GPU server).
 It has:
 - onboarding: hardware check, runtime install, model import with SHA256SUMS verification, a test decision;
-- easy mode: a tool-call gate and a bucket classifier;
+- easy mode: a tool-call gate and a bucket classifier, which also sorts whole files (CSV, TSV, JSON, JSON lines,
+  XML, text) into buckets and exports them;
 - advanced mode: a JSON editor with live validation, raw mode, batch JSONL scoring, temperature/threshold/policy tuning;
 - logs and a feedback export.
 
 Feasibility findings and measurements are in [FEASIBILITY.md](FEASIBILITY.md).
 
 ## Getting the app and the model
-- **App:** the installers are on the [v0.1.0 release](https://github.com/sndstone/openone-app/releases/tag/v0.1.0)
+- **App:** the installers are on the [latest release](https://github.com/sndstone/openone-app/releases/latest)
   (Windows and macOS Apple Silicon; unsigned). The macOS dmg is built by the CI workflow.
 - **Model:** the packages are on the [model-v9-r16 release](https://github.com/sndstone/openone-app/releases/tag/model-v9-r16).
   GitHub limits release files to 2 GiB, so each zip is split into parts. Join the parts, check the hash, then import the
@@ -61,6 +62,44 @@ sending back. Users can also report a case by hand (the "Report" button on any r
 
 Invalid *requests* are the user's own input, so they are not logged as feedback. They are shown in the UI with JSON
 paths and line numbers instead, and nothing is scored. The feedback log stays reserved for model and response failures.
+
+## Sorting a file into buckets
+**Buckets → Classify a file** runs the bucket classifier over every record of a file, using the buckets and
+instructions in the panel above it.
+
+**Import.** The format is detected from the file name or content; you can also pick it.
+
+| Format | What a record is |
+| --- | --- |
+| CSV / TSV | one row; the first row is the header. The delimiter (`,` `;` `\|` tab) is sniffed; quoted fields may hold newlines. |
+| JSON | each element of a top-level array (objects or strings), or of the one array inside an object such as `{"items": [...]}`; a single object is one record |
+| JSON lines | one object (or string) per line |
+| XML | the repeated element that looks most like a record (for example `rss/channel/item`, or `export/items/item` next to a header); a document without repeated records is one record. Every candidate is listed under "XML record element" to switch, or type a name or path. Attributes become `@name`, repeated children become lists, mixed content keeps its full text. DOCTYPE/ENTITY declarations are refused. |
+| Text | one record per non-empty line |
+
+**Setup.** After loading you choose:
+- **Text to classify:** one field (the model reads it as `{"text": ...}`), several fields, or the whole record (both read
+  as a JSON object). The most text-like field is preselected.
+- **ID column:** optional; shown in the table and exported.
+- **Expected bucket column:** optional; if set, the app reports accuracy and marks each row ✓ or ✗.
+- **Re-importing an export** works: earlier OpenOne results are recognized by their full signature (the JSON `_openone` object, or the CSV column block with valid probabilities and statuses), kept in the new export, and never shown to the model when it classifies the whole record. Export columns that would clash with an original column get an `_openone` suffix; original data is never overwritten.
+
+**Results.**
+- Counts per bucket: accepted (p ≥ the bucket threshold) vs top choice but below the threshold, plus errors.
+- Click a bucket name to filter the table; click a column header to sort it (bucket, confidence, id, text, or any
+  bucket's probability).
+- Stop keeps the rows scored so far. Up to 50,000 records per file; the table shows the first 5,000, and exports always
+  hold every row.
+
+**Export**, sorted by bucket then confidence (default), by confidence, or in file order:
+
+| Format | Shape |
+| --- | --- |
+| CSV | original columns, then `bucket`, `p_bucket`, `accepted`, `status`, `p_<bucket>` for each bucket, and `expected`/`correct`/`error` when used. UTF-8 with a BOM so Excel reads it correctly. Text a spreadsheet would run as a formula (`=`, `@`, `+`/`-` not followed by a number) gets a leading `'`. |
+| JSON | `{"meta": {...}, "buckets": [...], "records": [{...original, "_openone": {"bucket", "p_bucket", "accepted", ...}}]}` |
+| JSON lines | one `{...original, "_openone": {...}}` per line |
+| XML | `<record bucket= p_bucket= accepted= status=><data>original</data><probabilities>…</probabilities></record>`; re-importable with record element `data` |
+| ZIP | one CSV per bucket (accepted rows), plus `below_threshold.csv` and `errors.csv` |
 
 ## Stack, and why
 | Part | Choice | Why |
@@ -121,8 +160,8 @@ The app then uses `http://127.0.0.1:8130`. Not tested here (this PC has no NVIDI
 ## Building
 | Target | Command | Output (in `release/`) |
 | --- | --- | --- |
-| Windows | `powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1 [-Offline]` | `OpenOne-Setup-0.1.0-win-x64.exe` (per-user Inno Setup installer), `OpenOne-0.1.0-win-x64-portable.zip`, `-offline` variants with the CPU runtime bundled, `SHA256SUMS.txt` |
-| macOS (Apple Silicon) | `packaging/macos/build.sh [--offline]` on a Mac with Python 3.12 | `OpenOne-0.1.0-macos-arm64.dmg`, `.app.zip` |
+| Windows | `powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1 [-Offline]` | `OpenOne-Setup-<version>-win-x64.exe` (per-user Inno Setup installer), `OpenOne-<version>-win-x64-portable.zip`, `-offline` variants with the CPU runtime bundled, `SHA256SUMS.txt` |
+| macOS (Apple Silicon) | `packaging/macos/build.sh [--offline]` on a Mac with Python 3.12 | `OpenOne-<version>-macos-arm64.dmg`, `.app.zip` |
 | Both, in CI | `.github/workflows/build.yml` (manual dispatch) | workflow artifacts (kept 14 days) |
 
 Details:
@@ -144,6 +183,8 @@ Details:
   releases don't re-upload weights. Weights are never committed to the repo (`.gitignore`); Git LFS was not used
   because its free quota is far below what public clones of 3.8 GB would need.
 
+**Appearance.** The UI follows the OS light/dark setting; Settings → App → Appearance can pin light or dark.
+
 ## Data folder
 `%LOCALAPPDATA%\OpenOne` (Windows), `~/Library/Application Support/OpenOne` (macOS); the portable zip keeps it in
 `data\` next to the exe. It holds:
@@ -155,7 +196,7 @@ Details:
 The uninstaller asks before deleting it.
 
 ## Tests
-- `tests/test_core.py`: 33 unit tests (the dequant ones need torch).
+- `tests/test_core.py`: 48 unit tests (the dequant ones need torch), including file import/export and a bucket batch against a fake backend.
   - Covered: tampered and unsafe zips, strict JSON, schema errors, 9 kinds of corrupted response that must fail
     validation, provisional fallback settings, gate precedence, and the dequant math.
 - `tests/e2e_api.py`: the full app API against real packages:
@@ -170,6 +211,7 @@ The uninstaller asks before deleting it.
 | --- | --- |
 | Windows 11, Intel Arc B580 (XPU), bf16, app-installed runtime | **tested end to end**. Onboarding → runtime install → import → decisions → batch → feedback. Installer installed, launched in its native window, uninstalled. |
 | Windows 11, Arc B580, FP8 package → bf16 fallback (cached + uncached) | **tested end to end** |
+| Windows 11, Arc B580, bucket file batch (0.2.0) | **tested end to end** with 23 synthetic tickets as CSV, nested JSON and XML: 87 % agreement with the labels, ~60 ms per record; all five export formats checked. |
 | Windows 11, CPU, bf16 | **tested** (probe, worker smoke test, tiny-model test). ~0.76 s per gate decision. |
 | Windows 11, offline installer (CPU runtime bundled) | **tested**: installed silently, then bundled runtime found → bf16 import → start in 15 s → valid decision (~0.9 s on CPU) → uninstalled. |
 | Windows 11 → remote gate service (FP8, vLLM 0.31, RTX 4060 Ti on ai-cluster, port 8130) | **tested end to end**. ~63 ms per decision over the LAN. |
@@ -192,13 +234,13 @@ Three read-only review rounds by gpt-6.1-sol (via Codex):
 
 Every fix has a regression test in `tests/test_core.py`.
 
-## Release artifacts (2026-10-20, unsigned)
-| File | Size |
-| --- | --- |
-| `OpenOne-Setup-0.1.0-win-x64.exe` | 11.5 MB (runtime downloaded at onboarding) |
-| `OpenOne-0.1.0-win-x64-portable.zip` | 11.9 MB |
-| `OpenOne-Setup-0.1.0-win-x64-offline.exe` | 162 MB (CPU runtime bundled) |
-| `OpenOne-0.1.0-win-x64-offline-portable.zip` | 298 MB |
+The 0.2.0 bucket file batch had three more rounds: 13 findings, then 2, then 3 (column and file-name collisions, CSV delimiter fallback, JSON wrapper detection, XML record level and mixed content, the DOCTYPE check, formula injection in CSV headers, XML-forbidden characters, record limits while parsing, earlier results leaking into the model input). All were fixed with regression tests.
 
-Published on the [v0.1.0 release](https://github.com/sndstone/openone-app/releases/tag/v0.1.0) with a
-`SHA256SUMS.txt`. A local build writes them to `release/`.
+## Release artifacts (unsigned)
+Each `vX.Y.Z` release holds the Windows installer, the portable zip, offline variants with the CPU runtime bundled,
+the macOS dmg/app zip (built in CI) and a `SHA256SUMS` file. A local build writes them to `release/`.
+
+| Version | Changes |
+| --- | --- |
+| 0.2.0 | Bucket file batches (CSV/TSV/JSON/JSONL/XML/text import; sort, filter; CSV/JSON/JSONL/XML/per-bucket ZIP export). Model cards show the numbers the local backend applies (fitted fallback numbers for FP8). Appearance setting. macOS: the worker keeps a venv interpreter's symlink. |
+| 0.1.0 | First release. |

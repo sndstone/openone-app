@@ -3,6 +3,7 @@
 Every /api call needs the per-session token (X-OpenOne-Token), and the Host header must be the loopback address, so
 other web pages and DNS-rebinding tricks cannot drive the app.
 """
+import base64
 import json
 import mimetypes
 import os
@@ -16,9 +17,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import paths
+from . import paths, records
 from .backends import BackendError
-from .controller import Controller
+from .controller import MAX_BATCH_LINES, Controller
 from openone_core.package import PackageError
 from openone_core.pipeline import parse_json_text
 
@@ -166,6 +167,8 @@ def build_routes(c: Controller, ui):
                                     or not all(isinstance(v, str) and v.strip() for v in pol.values())):
                 raise ApiError(400, "policy must have non-empty allow, ask and block texts")
             c.store.settings["policy"] = pol
+        if "theme" in patch and patch["theme"] not in ("system", "light", "dark"):
+            raise ApiError(400, "theme must be system, light or dark")
         if "bucket_accept_at" in patch:
             v = float(patch["bucket_accept_at"])
             if not 0 <= v <= 1:
@@ -202,6 +205,49 @@ def build_routes(c: Controller, ui):
             Path(b["path"]).write_text(content, encoding="utf-8", newline="")
             return {"path": b["path"], "bytes": len(content.encode())}
         return {"content": content, "filename": f"openone-batch-{time.strftime('%Y%m%d-%H%M%S')}.{fmt}"}
+
+    def _records_input(b):
+        text = b.get("text")
+        name = b.get("filename")
+        if text is None and b.get("path"):
+            p = Path(b["path"])
+            if not p.is_file():
+                raise ApiError(400, f"{p} does not exist")
+            if p.stat().st_size > MAX_BODY:
+                raise ApiError(400, f"{p.name} is larger than {MAX_BODY >> 20} MB")
+            text, name = p.read_text(encoding="utf-8-sig", errors="replace"), p.name
+        if not text:
+            raise ApiError(400, "no file content")
+        try:
+            return records.parse(text, b.get("format") or None, name, (b.get("record_tag") or "").strip() or None,
+                                 limit=MAX_BATCH_LINES)
+        except records.RecordError as e:
+            raise ApiError(400, str(e)) from None
+
+    def records_parse(b, _q):
+        r = _records_input(b)
+        return {"format": r["format"], "count": len(r["records"]), "fields": r["fields"], "record_tag": r["record_tag"],
+                "warnings": r["warnings"], "result_fields": r["result_fields"],
+                "record_candidates": r["record_candidates"], "sample": r["records"][:5]}
+
+    def bucket_batch_start(b, _q):
+        parsed = _records_input(b)
+        fields = b.get("text_fields") or [records.WHOLE]
+        if not isinstance(fields, list) or not all(isinstance(f, str) for f in fields):
+            raise ApiError(400, "text_fields must be a list of field names")
+        try:
+            return job_view(c.start_bucket_batch(parsed, _need(b, "question")[0], fields, b.get("id_field") or None,
+                                                 b.get("expected_field") or None, b.get("use_overrides", True)))
+        except BackendError as e:
+            raise ApiError(503, str(e)) from None
+
+    def bucket_batch_export(b, _q):
+        jid, fmt = _need(b, "id", "format")
+        data, ext = c.export_bucket_batch(jid, fmt, b.get("sort") or "bucket")
+        if b.get("path"):
+            Path(b["path"]).write_bytes(data)
+            return {"path": b["path"], "bytes": len(data)}
+        return {"base64": base64.b64encode(data).decode(), "filename": f"openone-buckets-{time.strftime('%Y%m%d-%H%M%S')}.{ext}"}
 
     def logs_get(_b, q):
         name = (q.get("name") or ["app.log"])[0]
@@ -257,6 +303,8 @@ def build_routes(c: Controller, ui):
         ("GET", "/api/presets"): lambda b, q: c.presets(), ("GET", "/api/schemas"): lambda b, q: c.schemas(),
         ("POST", "/api/settings"): settings_post, ("GET", "/api/settings/effective"): settings_effective,
         ("POST", "/api/batch"): batch_start, ("POST", "/api/batch/export"): batch_export,
+        ("POST", "/api/records/parse"): records_parse, ("POST", "/api/bucket-batch"): bucket_batch_start,
+        ("POST", "/api/bucket-batch/export"): bucket_batch_export,
         ("GET", "/api/logs"): logs_get, ("GET", "/api/feedback"): feedback_get,
         ("POST", "/api/feedback/report"): feedback_report, ("POST", "/api/feedback/export"): feedback_export,
         ("POST", "/api/feedback/clear"): feedback_clear, ("POST", "/api/open"): open_folder, ("POST", "/api/dialog"): dialog,

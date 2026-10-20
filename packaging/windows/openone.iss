@@ -1,8 +1,8 @@
 ; OpenOne Windows installer (Inno Setup 6). Built by packaging/windows/build.ps1:
-;   ISCC.exe /DAppVersion=0.1.0 /DDistDir=..\..\dist\OpenOne /DOutDir=..\..\release /DSuffix= openone.iss
+;   ISCC.exe /DAppVersion=0.2.0 /DDistDir=..\..\dist\OpenOne /DOutDir=..\..\release /DSuffix= openone.iss
 ; Per-user install (no admin needed); the model package is NOT included, it is imported at first start.
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.2.0"
 #endif
 #ifndef DistDir
   #define DistDir "..\..\dist\OpenOne"

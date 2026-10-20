@@ -7,7 +7,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).parent
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 IS_MAC = sys.platform == "darwin"
 
 datas = [

@@ -12,7 +12,7 @@ from pathlib import Path
 from . import paths
 from openone_core import __version__ as CORE_VERSION
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 DEFAULTS = {
     "onboarded": False,
     "active_model": None,

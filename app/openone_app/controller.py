@@ -11,7 +11,7 @@ from pathlib import Path
 from openone_core import package, pipeline, policy
 from openone_core.schemas import REQUEST_SCHEMA, RESPONSE_SCHEMA
 
-from . import paths, presets, runtime
+from . import paths, presets, records, runtime
 from .backends import BackendError, LocalWorker, RemoteBackend
 from .jobs import Jobs
 from .store import APP_VERSION, Store
@@ -47,6 +47,13 @@ class Controller:
                     out.append(info)
                 except (package.PackageError, ValueError, OSError) as e:
                     out.append({"name": d.name, "path": str(d), "broken": str(e)})
+        for info in out:                       # the numbers a local backend applies (differ from openone.json for FP8)
+            if "broken" not in info:
+                try:
+                    s, _ = policy.resolve_settings(info, info["local_mode"], out)
+                    info["local_settings"] = {k: s[k] for k in ("temperature", "gate", "source", "provisional") if k in s}
+                except (KeyError, ValueError):
+                    pass
         return out
 
     def model(self, name):
@@ -431,7 +438,7 @@ class Controller:
                 results.append(res)
             job.update(stage="done", done=len(results), total=len(rows))
             summary = self._batch_summary(results)
-            self.batches[job.id] = results
+            self._keep_batch(job.id, results)
             return summary
         return self.jobs.start("batch", run)
 
@@ -460,7 +467,7 @@ class Controller:
 
     def export_batch(self, jid, fmt):
         results = self.batches.get(jid)
-        if results is None:
+        if not isinstance(results, list):
             raise ValueError("no finished batch with that id")
         if fmt == "jsonl":
             return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in results)
@@ -480,6 +487,115 @@ class Controller:
                             r.get("response_valid", ""), " | ".join(r.get("errors") or [])])
         return buf.getvalue()
 
+    # ------------------------------------------------------------------------------------------------ bucket batch
+    def _keep_batch(self, jid, results):
+        self.batches[jid] = results
+        while len(self.batches) > 5:                    # finished batches are held in memory for export
+            self.batches.pop(next(iter(self.batches)))
+
+    def start_bucket_batch(self, parsed, question, text_fields, id_field=None, expected_field=None, use_overrides=True):
+        """Classify every record of a parsed file (records.parse) with one bucket question. A cancelled run keeps the
+        rows scored so far."""
+        if not isinstance(question, dict) or question.get("type") != "choice":
+            raise ValueError("the bucket question must be a choice question")
+        buckets = policy.criteria_names(question)
+        if len(buckets) < 2:
+            raise ValueError("add at least two buckets")
+        known = set(parsed["fields"])
+        for f in [*(text_fields or []), id_field, expected_field]:
+            if f and f != records.WHOLE and f not in known:
+                raise ValueError(f"unknown field {f!r}")
+        recs = parsed["records"]
+        self.backend_ready()
+
+        def run(job):
+            rows, t0 = [], time.time()
+            for i, rec in enumerate(recs):
+                if job.cancelled():
+                    break
+                job.update(stage="classifying", done=i, total=len(recs), message=f"record {i + 1}")
+                r = {"index": i, "id": records.cell(rec.get(id_field)) if id_field else str(i + 1), "record": rec}
+                if expected_field:
+                    r["expected"] = records.cell(rec.get(expected_field)).strip()
+                st = records.state_for(rec, text_fields, parsed.get("result_fields") or ())
+                if st is None:
+                    rows.append(r | {"status": "empty", "error": "nothing to classify in the chosen field(s)"})
+                    continue
+                r["text"] = st["text"] if set(st) == {"text"} and isinstance(st["text"], str) else json.dumps(st, ensure_ascii=False)
+                t = time.time()
+                try:
+                    out = self.decide({"state": st, "questions": {"bucket": question}}, use_overrides=use_overrides,
+                                      source="bucket-batch")
+                except BackendError as e:
+                    rows.append(r | {"status": "backend_error", "error": str(e)})
+                    continue
+                r["latency_ms"] = round((time.time() - t) * 1000, 1)
+                if not out["request_validation"]["valid"]:
+                    e = out["request_validation"]["errors"][0]
+                    rows.append(r | {"status": "invalid_request", "error": f"{e.get('path') or '/'}: {e['message']}"})
+                    continue
+                a = out["response"]["answers"]["bucket"]
+                r |= {"status": "ok" if out["response_validation"]["valid"] else "invalid_response", "bucket": a["choice"],
+                      "p": a["x_p_max"], "accepted": bool(a.get("accepted", a.get("verdict", {}).get("action") == "auto_run")),
+                      "probabilities": a["probabilities"]}
+                if not out["response_validation"]["valid"]:
+                    r["error"] = "; ".join(e["message"] for e in out["response_validation"]["errors"][:3])
+                if expected_field and r["expected"]:
+                    r["correct"] = r["expected"] == a["choice"]
+                rows.append(r)
+            meta = {"source_format": parsed["format"], "records": len(recs), "classified": len(rows),
+                    "cancelled": len(rows) < len(recs), "text_fields": text_fields or [records.WHOLE],
+                    "instructions": question.get("instructions"), "seconds": round(time.time() - t0, 1),
+                    "accept_at": (self.effective_settings(use_overrides)[0] or {}).get("bucket", {}).get("accept_at")}
+            self._keep_batch(job.id, {"kind": "bucket", "rows": rows, "buckets": buckets, "fields": parsed["fields"],
+                                      "meta": meta})
+            job.update(stage="done", done=len(rows), total=len(recs))
+            return self._bucket_summary(rows, buckets, meta)
+        return self.jobs.start("bucket-batch", run)
+
+    @staticmethod
+    def _bucket_summary(rows, buckets, meta, preview=5000):
+        counts = {b: {"accepted": 0, "below": 0} for b in buckets}
+        status, lat = {}, []
+        for r in rows:
+            status[r["status"]] = status.get(r["status"], 0) + 1
+            if "latency_ms" in r:
+                lat.append(r["latency_ms"])
+            if r.get("bucket") in counts:
+                counts[r["bucket"]]["accepted" if r.get("accepted") else "below"] += 1
+        graded = [r for r in rows if "correct" in r]
+        q = sorted(lat)
+        return {"meta": meta, "buckets": buckets, "counts": counts, "status": status,
+                "accuracy": round(sum(r["correct"] for r in graded) / len(graded), 4) if graded else None,
+                "graded": len(graded),
+                "latency_ms": {"p50": q[len(q) // 2], "p95": q[min(len(q) - 1, int(len(q) * 0.95))],
+                               "mean": round(statistics.mean(lat), 1)} if lat else None,
+                "preview_limit": preview,
+                "rows": [{k: r.get(k) for k in ("index", "id", "status", "bucket", "p", "accepted", "probabilities",
+                                                "expected", "correct", "error")} | {"text": (r.get("text") or "")[:400]}
+                         for r in rows[:preview]]}
+
+    def export_bucket_batch(self, jid, fmt, sort="bucket"):
+        """-> (bytes, extension)"""
+        b = self.batches.get(jid)
+        if not b or b.get("kind") != "bucket":
+            raise ValueError("no finished bucket batch with that id")
+        if sort not in ("bucket", "confidence", "original"):
+            raise ValueError("sort must be bucket, confidence or original")
+        rows = records.sort_rows(b["rows"], b["buckets"], sort)
+        meta = b["meta"] | {"sorted_by": sort, "exported": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        if fmt == "csv":
+            return records.to_csv(rows, b["buckets"], b["fields"]).encode("utf-8"), "csv"
+        if fmt == "json":
+            return records.to_json(rows, b["buckets"], meta).encode("utf-8"), "json"
+        if fmt == "jsonl":
+            return records.to_jsonl(rows, b["buckets"]).encode("utf-8"), "jsonl"
+        if fmt == "xml":
+            return records.to_xml(rows, b["buckets"], meta).encode("utf-8"), "xml"
+        if fmt == "zip":
+            return records.to_zip(rows, b["buckets"], b["fields"]), "zip"
+        raise ValueError("format must be csv, json, jsonl, xml or zip")
+
     # ------------------------------------------------------------------------------------------------ status
     def status(self):
         s = self.store.settings
@@ -494,6 +610,7 @@ class Controller:
                 "policy": s.get("policy") or policy.DEFAULT_POLICY, "default_policy": policy.DEFAULT_POLICY,
                 "gate_instructions": policy.GATE_INSTRUCTIONS, "bucket_instructions": policy.BUCKET_INSTRUCTIONS,
                 "save_history": s.get("save_history"), "bucket_accept_at": s.get("bucket_accept_at"),
+                "theme": s.get("theme") or "system",
                 "dequant_cache": s.get("dequant_cache") or {}, "feedback_count": len(self.store.feedback_items()),
                 "jobs": {k: j.view() for k, j in self.jobs.jobs.items() if j.state == "running"},
                 "fallback_warning": policy.FALLBACK_WARNING}

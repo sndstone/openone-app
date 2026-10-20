@@ -11,7 +11,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
-VERSION=0.1.0
+VERSION=0.2.0
 PY=python3.12
 OFFLINE=0
 while [ $# -gt 0 ]; do

@@ -71,6 +71,35 @@
       </div>
       <div class="panel result" id="bucketResult"><div class="empty">Probabilities per bucket appear here.</div></div>
     </div>
+    <div class="panel" id="bbPanel">
+      <div class="panel-head"><h2>Classify a file</h2></div>
+      <p class="hint">Import CSV, TSV, JSON (an array, or an object holding one array), JSON lines, XML or plain text (one record per line).
+        Every record is classified with the buckets and instructions above. Then sort, filter and export the results.</p>
+      <div class="row wrap">
+        <input type="file" id="bbFile" accept=".csv,.tsv,.tab,.json,.jsonl,.ndjson,.xml,.txt">
+        <span class="or">or path</span><input id="bbPath" class="grow" placeholder="C:\data\tickets.csv">
+        <button id="bbBrowse" class="small native-only">Browse…</button>
+        <select id="bbFormat" title="file format"><option value="">auto-detect</option><option value="csv">CSV</option><option value="tsv">TSV</option>
+          <option value="json">JSON</option><option value="jsonl">JSON lines</option><option value="xml">XML</option><option value="txt">text lines</option></select>
+        <button id="bbLoad" class="small">Load</button>
+      </div>
+      <div id="bbSetup" class="hidden">
+        <div id="bbInfo" class="hint"></div>
+        <div class="grid3">
+          <div><div class="lbl">Text to classify</div><div id="bbFields" class="chips"></div></div>
+          <label>ID column (optional)<select id="bbId"></select></label>
+          <label>Expected bucket column (optional, gives accuracy)<select id="bbExpected"></select></label>
+        </div>
+        <div id="bbTagRow" class="row wrap hidden"><label class="grow">XML record element<select id="bbTagSel"></select></label>
+          <label>or element name / path<input id="bbTag" placeholder="channel/item"></label></div>
+        <div id="bbExcluded" class="hint hidden"></div>
+        <div class="tablewrap small-table"><table class="grid" id="bbSample"></table></div>
+        <div class="actions"><button id="bbRun" class="primary">Classify all</button><button id="bbCancel" class="small hidden">Stop</button>
+          <span id="bbMsg" class="msg"></span></div>
+      </div>
+      <div id="bbProgress"></div>
+      <div id="bbResult"></div>
+    </div>
   </section>
 
   <!-- ======================================================== JSON editor -->
@@ -138,6 +167,7 @@
         <div class="panel-head"><h2>Runtimes</h2></div>
         <div id="sRuntimes"></div>
         <div class="panel-head"><h2>App</h2></div>
+        <label class="inline">Appearance <select id="sTheme"><option value="system">follow the system</option><option value="light">light</option><option value="dark">dark</option></select></label>
         <label class="inline"><input type="checkbox" id="sHistory"> Save every decision to logs/decisions.jsonl (off by default; it stores your commands)</label>
         <div class="row"><button id="sOpenData" class="small">Open data folder</button><button id="sOnboard" class="small">Run onboarding again</button></div>
         <p class="hint" id="sAbout"></p>

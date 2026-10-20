@@ -17,6 +17,11 @@ FILE_TYPES = {
     "zip": ("Model package (*.zip)", "All files (*.*)"),
     "jsonl": ("JSON lines (*.jsonl;*.json;*.txt)", "All files (*.*)"),
     "python": ("Python (python.exe;python3;python)", "All files (*.*)"),
+    "records": ("Data files (*.csv;*.tsv;*.json;*.jsonl;*.ndjson;*.xml;*.txt)", "All files (*.*)"),
+    "csv": ("CSV (*.csv)", "All files (*.*)"),
+    "json": ("JSON (*.json)", "All files (*.*)"),
+    "xml": ("XML (*.xml)", "All files (*.*)"),
+    "archive": ("Zip archive (*.zip)", "All files (*.*)"),
 }
 
 

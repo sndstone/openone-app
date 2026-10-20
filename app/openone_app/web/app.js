@@ -61,8 +61,14 @@ function setBanner(text, isErr) {
   if (!text) { b.classList.add("hidden"); return; }
   b.textContent = text; b.className = "banner" + (isErr ? " error" : "");
 }
+function applyTheme(t) {
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  localStorage.setItem("openone-theme", t || "system");
+}
+applyTheme(localStorage.getItem("openone-theme"));
 function renderChrome() {
   const st = S.status, b = st.backend || {};
+  if (st.theme !== undefined && st.theme !== (document.documentElement.dataset.theme || "system")) applyTheme(st.theme);
   const pill = $("backendPill");
   pill.className = "pill " + (b.state || "stopped");
   pill.textContent = b.state === "ready" ? `ready · ${b.kind === "remote" ? "remote" : b.device}` :
@@ -326,8 +332,8 @@ function bucketRow(b = {}) {
   return row;
 }
 $("bAdd").addEventListener("click", () => $("bList").append(bucketRow()));
-function bucketRequest() {
-  const text = $("bText").value.trim(); if (!text) throw new Error("enter the text to classify");
+function bucketRequest(bucketsOnly) {             // bucketsOnly: the file batch supplies its own states
+  const text = $("bText").value.trim(); if (!text && !bucketsOnly) throw new Error("enter the text to classify");
   let state = { text };
   if (/^[\[{]/.test(text)) { try { const v = JSON.parse(text); if (v && typeof v === "object") state = v; } catch { /* plain text */ } }
   const crit = {};
@@ -348,6 +354,147 @@ function loadBucketPreset(p) {
   $("bText").value = p.text; $("bInstr").value = p.instructions; clear($("bList")); p.buckets.forEach((b) => $("bList").append(bucketRow(b)));
 }
 $("bucketPreset").addEventListener("change", (e) => { const p = S.presets.bucket.find((x) => x.id === e.target.value); if (p) loadBucketPreset(p); });
+
+// ------------------------------------------------------------------------------------------------ bucket file batch
+const BB = { input: null, parsed: null, job: null, result: null, sort: { key: "c:bucket", dir: 1 }, filter: null, limit: 300 };
+// sort keys: "c:<column>" or "b:<bucket>" (that bucket's probability); filters: "bucket:<name>", "below", "errors"
+const bbMsg = (t, err) => { $("bbMsg").textContent = t; $("bbMsg").className = "msg" + (err ? " err" : ""); };
+const bbCell = (v) => v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+$("bbBrowse").addEventListener("click", async () => { const p = await pickPath("open", "records"); if (p) { $("bbPath").value = p; $("bbFile").value = ""; $("bbTag").value = ""; bbLoad(); } });
+$("bbFile").addEventListener("change", () => { if ($("bbFile").files[0]) { $("bbPath").value = ""; $("bbTag").value = ""; bbLoad(); } });
+$("bbPath").addEventListener("change", () => { $("bbTag").value = ""; });
+$("bbLoad").addEventListener("click", () => bbLoad());
+$("bbFormat").addEventListener("change", () => BB.input && bbLoad());
+$("bbTag").addEventListener("change", () => BB.input && bbLoad());
+$("bbTagSel").addEventListener("change", () => { $("bbTag").value = $("bbTagSel").value; if (BB.input) bbLoad(); });
+async function bbLoad() {
+  const f = $("bbFile").files[0], path = $("bbPath").value.trim();
+  if (f) BB.input = { text: await f.text(), filename: f.name }; else if (path) BB.input = { path }; else return toast("Choose a file or enter a path", true);
+  const body = { ...BB.input, format: $("bbFormat").value, record_tag: $("bbTag").value };
+  let r; try { r = await api("/api/records/parse", body); } catch (e) { $("bbSetup").classList.add("hidden"); return toast(e.message, true); }
+  BB.parsed = r; $("bbSetup").classList.remove("hidden");
+  $("bbTagRow").classList.toggle("hidden", r.format !== "xml");
+  if (r.format === "xml") {
+    const sel = clear($("bbTagSel")), cands = r.record_candidates || [];
+    const opts = cands.some((c) => c.path === r.record_tag) ? [] : [{ path: r.record_tag, count: r.count }];
+    for (const c of [...opts, ...cands]) sel.append(el("option", { value: c.path, text: `${c.path}  (${c.count.toLocaleString()})` }));
+    sel.value = r.record_tag;
+  }
+  $("bbExcluded").classList.toggle("hidden", !(r.result_fields || []).length);
+  $("bbExcluded").textContent = (r.result_fields || []).length ? "Earlier OpenOne results (" + r.result_fields.join(", ") +
+    ") are kept in exports but left out when classifying the whole record." : "";
+  $("bbInfo").textContent = `${r.format.toUpperCase()} · ${r.count.toLocaleString()} records · ${r.fields.length} field(s)` +
+    (r.record_tag ? ` · record element <${r.record_tag}>` : "") + (r.warnings.length ? " · " + r.warnings.join("; ") : "");
+  // text fields: guess the most text-like column (longest average string)
+  const avg = (k) => r.sample.reduce((n, x) => n + (typeof x[k] === "string" ? x[k].length : 0), 0) / Math.max(1, r.sample.length);
+  const cand = r.fields.filter((k) => !(r.result_fields || []).includes(k));
+  const guess = cand.length === 1 ? cand[0] : [...cand].sort((a, b) => avg(b) - avg(a))[0];
+  const chips = clear($("bbFields"));
+  const chip = (name, label, on) => {
+    const c = el("label", { class: "chip" + (on ? " on" : "") }, el("input", { type: "checkbox", value: name, ...(on ? { checked: true } : {}) }), label);
+    c.querySelector("input").addEventListener("change", (e) => {
+      if (name === "*" && e.target.checked) chips.querySelectorAll("input").forEach((i) => { if (i !== e.target) { i.checked = false; i.parentNode.classList.remove("on"); } });
+      if (name !== "*" && e.target.checked) { const w = chips.querySelector("input[value='*']"); w.checked = false; w.parentNode.classList.remove("on"); }
+      c.classList.toggle("on", e.target.checked);
+    });
+    return c;
+  };
+  chips.append(chip("*", "whole record", false), ...r.fields.map((k) => chip(k, k, k === guess)));
+  for (const id of ["bbId", "bbExpected"]) {
+    const s = clear($(id)); s.append(el("option", { value: "", text: "—" }), ...r.fields.map((k) => el("option", { value: k, text: k })));
+  }
+  const idGuess = r.fields.find((k) => /^(id|key|uuid|ticket_?id|@id)$/i.test(k)); if (idGuess) $("bbId").value = idGuess;
+  const sample = clear($("bbSample")), cols = r.fields.slice(0, 12);
+  sample.append(el("tr", {}, cols.map((k) => el("th", { text: k }))), ...r.sample.map((x) => el("tr", {}, cols.map((k) => el("td", { class: "clip", text: bbCell(x[k]), title: bbCell(x[k]) })))));
+  bbMsg("");
+}
+function bbFieldsChosen() { return [...$("bbFields").querySelectorAll("input:checked")].map((i) => i.value); }
+$("bbRun").addEventListener("click", async () => {
+  if (!BB.parsed) return;
+  let req; try { req = bucketRequest(true); } catch (e) { return bbMsg(e.message, true); }
+  const text_fields = bbFieldsChosen(); if (!text_fields.length) return bbMsg("pick at least one field to classify (or the whole record)", true);
+  const body = { ...BB.input, format: BB.parsed.format, record_tag: BB.parsed.record_tag || "", question: req.questions.bucket, text_fields,
+    id_field: $("bbId").value, expected_field: $("bbExpected").value };
+  let j; try { j = await api("/api/bucket-batch", body); } catch (e) { return bbMsg(e.message, true); }
+  BB.job = j.id; bbMsg(""); $("bbCancel").classList.remove("hidden"); $("bbRun").disabled = true; clear($("bbResult"));
+  const done = await watchJob(j.id, (x) => clear($("bbProgress")).append(progressBar(x)));
+  $("bbCancel").classList.add("hidden"); $("bbRun").disabled = false;
+  if (done && done.state === "done") { clear($("bbProgress")); BB.result = { id: j.id, ...done.result }; BB.filter = null; BB.limit = 300; bbRender(); }
+});
+$("bbCancel").addEventListener("click", () => BB.job && api("/api/job/cancel", { id: BB.job }));
+function bbSorted() {
+  const r = BB.result, order = Object.fromEntries(r.buckets.map((b, i) => [b, i])), { key, dir } = BB.sort;
+  const f = BB.filter;
+  const rows = r.rows.filter((x) => f === null ? true : f === "below" ? x.status === "ok" && !x.accepted :
+    f === "errors" ? x.status !== "ok" : x.accepted && "bucket:" + x.bucket === f);
+  const cols = {
+    "c:bucket": (x) => [order[x.bucket] ?? 1e9, x.accepted ? 0 : 1, -(x.p || 0)], "c:p": (x) => [x.p || 0], "c:index": (x) => [x.index],
+    "c:id": (x) => [x.id || ""], "c:text": (x) => [x.text || ""], "c:expected": (x) => [x.expected || ""],
+  };
+  const val = key.startsWith("b:") ? ((x) => [x.probabilities ? x.probabilities[key.slice(2)] || 0 : 0]) : cols[key] || cols["c:index"];
+  const cmp = (a, b) => { const va = val(a), vb = val(b); for (let i = 0; i < va.length; i++) { if (va[i] < vb[i]) return -dir; if (va[i] > vb[i]) return dir; } return a.index - b.index; };
+  return rows.sort(cmp);
+}
+function bbRender() {
+  const r = BB.result, box = clear($("bbResult")), m = r.meta;
+  const stat = (v, l, cls) => el("div", { class: "stat" }, el("div", { class: "v " + (cls || ""), text: v }), el("div", { class: "l", text: l }));
+  const below = Object.values(r.counts).reduce((n, c) => n + c.below, 0), errors = m.classified - (r.status.ok || 0);
+  box.append(el("div", { class: "stats" },
+    stat(m.classified.toLocaleString(), m.cancelled ? `classified (stopped; ${m.records.toLocaleString()} in file)` : "records classified"),
+    stat(Object.values(r.counts).reduce((n, c) => n + c.accepted, 0).toLocaleString(), `accepted (p ≥ ${m.accept_at})`, "ok"),
+    stat(below.toLocaleString(), "below threshold", below ? "warn" : ""), stat(errors.toLocaleString(), "errors / empty", errors ? "bad" : ""),
+    r.accuracy !== null ? stat((r.accuracy * 100).toFixed(1) + "%", `accuracy (${r.graded.toLocaleString()} with an expected bucket)`) : null,
+    r.latency_ms ? stat(r.latency_ms.p50 + " ms", `p50 per record (total ${m.seconds} s)`) : null));
+  // per-bucket bars; click one to filter the table
+  const max = Math.max(1, ...Object.values(r.counts).map((c) => c.accepted + c.below));
+  const bars = el("div", { class: "bbars" });
+  const fl = (key, label) => el("span", { class: "bfilter" + (BB.filter === key ? " sel" : ""), text: label, title: "show only these rows",
+    onclick: () => { BB.filter = BB.filter === key ? null : key; BB.limit = 300; bbRender(); } });
+  for (const b of r.buckets) {
+    const c = r.counts[b];
+    bars.append(fl("bucket:" + b, b), el("div", { class: "bbar" }, el("div", { class: "a", style: `width:${(100 * c.accepted / max).toFixed(2)}%` }), el("div", { class: "b", style: `width:${(100 * c.below / max).toFixed(2)}%` })),
+      el("span", { text: `${c.accepted.toLocaleString()}${c.below ? ` + ${c.below.toLocaleString()} below` : ""}` }));
+  }
+  if (below) bars.append(fl("below", "below threshold"), el("span"), el("span", { text: below.toLocaleString() }));
+  if (errors) bars.append(fl("errors", "errors / empty"), el("span"), el("span", { text: errors.toLocaleString() }));
+  box.append(el("div", { class: "hint", text: "Solid: accepted. Faded: the bucket was the top choice but below the threshold. Click a name to filter the table." }), bars);
+  // export
+  const sortSel = el("select", { id: "bbExportSort" }, el("option", { value: "bucket", text: "sorted by bucket, then confidence" }),
+    el("option", { value: "confidence", text: "sorted by confidence" }), el("option", { value: "original", text: "in file order" }));
+  box.append(el("div", { class: "toolbar" }, el("b", { text: "Export all rows:" }),
+    ...[["csv", "CSV"], ["json", "JSON"], ["jsonl", "JSON lines"], ["xml", "XML"], ["zip", "ZIP · one CSV per bucket"]].map(([f, l]) =>
+      el("button", { class: "small", text: l, onclick: () => bbExport(f, sortSel.value) })), sortSel));
+  // table
+  const rows = bbSorted(), shown = rows.slice(0, BB.limit);
+  const cols = [["c:index", "#"], ["c:id", "id"], ["c:text", "text"], ["c:bucket", "bucket"], ["c:p", "p"], ...(r.graded ? [["c:expected", "expected"]] : []),
+    ...r.buckets.map((b) => ["b:" + b, "p " + b])];
+  const th = ([k, l]) => el("th", { class: "sortable", text: l + (BB.sort.key === k ? (BB.sort.dir > 0 ? " ▲" : " ▼") : ""), title: "sort",
+    onclick: () => { BB.sort = { key: k, dir: BB.sort.key === k ? -BB.sort.dir : (k === "c:p" || k.startsWith("b:") ? -1 : 1) }; bbRender(); } });
+  const tr = (x) => el("tr", {},
+    el("td", { text: x.index + 1 }), el("td", { text: x.id ?? "" }), el("td", { class: "clip", text: x.text || x.error || "", title: x.text || x.error || "" }),
+    el("td", { class: x.status !== "ok" ? "bad" : x.accepted ? "ok" : "warn", text: x.status !== "ok" ? x.status : x.bucket + (x.accepted ? "" : " (below)") }),
+    el("td", { text: x.p !== null && x.p !== undefined ? fmtP(x.p) : "" }),
+    ...(r.graded ? [el("td", { class: x.correct === false ? "bad" : "", text: x.expected ? x.expected + (x.correct ? " ✓" : x.correct === false ? " ✗" : "") : "" })] : []),
+    ...r.buckets.map((b) => el("td", { text: x.probabilities ? fmtP(x.probabilities[b]) : "" })));
+  box.append(el("div", { class: "tablewrap" }, el("table", { class: "grid" }, el("tr", {}, cols.map(th)), shown.map(tr))));
+  const notes = [];
+  if (rows.length > shown.length) notes.push(el("button", { class: "small", text: `Show ${Math.min(500, rows.length - shown.length)} more`, onclick: () => { BB.limit += 500; bbRender(); } }));
+  notes.push(el("span", { class: "hint", text: `${shown.length.toLocaleString()} of ${rows.length.toLocaleString()} row(s) shown` +
+    (r.rows.length < m.classified ? ` · the table holds the first ${r.preview_limit.toLocaleString()} records; exports hold all ${m.classified.toLocaleString()}` : "") }));
+  box.append(el("div", { class: "row" }, ...notes));
+}
+async function bbExport(format, sort) {
+  const filt = { csv: "csv", json: "json", jsonl: "jsonl", xml: "xml", zip: "archive" }[format];
+  const path = await pickPath("save", filt, `openone-buckets.${format}`);
+  try {
+    const r = await api("/api/bucket-batch/export", path ? { id: BB.result.id, format, sort, path } : { id: BB.result.id, format, sort });
+    if (r.base64 !== undefined) {
+      const bin = Uint8Array.from(atob(r.base64), (c) => c.charCodeAt(0));
+      const type = { csv: "text/csv", json: "application/json", jsonl: "application/json", xml: "application/xml", zip: "application/zip" }[format];
+      const a = el("a", { href: URL.createObjectURL(new Blob([bin], { type })), download: r.filename }); document.body.append(a); a.click(); a.remove();
+    } else toast("Saved " + r.path);
+  } catch (e) { toast(e.message, true); }
+}
 
 // ------------------------------------------------------------------------------------------------ JSON editor
 const eText = $("eText"), eGutter = $("eGutter");
@@ -502,6 +649,19 @@ $("pSave").addEventListener("click", async () => {
 $("pReset").addEventListener("click", async () => { await api("/api/settings", { policy: null }); await refreshStatus(); renderTuning(); toast("Policy reset to the default texts"); });
 
 // ------------------------------------------------------------------------------------------------ settings
+// the numbers this app applies when it runs the package locally; for the FP8 fallback these are the fitted fallback
+// numbers, not the package's own (native FP8, vLLM) openone.json
+function modelNumbers(m, fb) {
+  const ls = m.local_settings, o = m.openone;
+  const t = ls ? [ls.temperature.toolcall, ls.temperature.bucket] : [o.usecase_temperatures.usecase_toolcall, o.usecase_temperatures.usecase_bucket];
+  const g = ls ? [ls.gate.auto_run_at, ls.gate.alarm_at] : [o.gate.auto_run_if_p_allow_at_least, o.gate.alarm_if_p_block_at_least];
+  const src = ls ? `${fb ? "applied locally (FP8→bf16 fallback): " : ""}${ls.source.gate}` : "openone.json";
+  const out = [el("span", { title: src }, "T tool/bucket ", el("b", { text: `${t[0]} / ${t[1]}` })),
+    el("span", { title: src }, "auto-run/alarm ", el("b", { text: `${g[0]} / ${(+g[1]).toFixed(4)}` }))];
+  if (fb && ls) out.push(el("span", { class: "hint", text: `local fallback numbers${ls.provisional ? " (provisional)" : ", fitted under vLLM"}; ` +
+    `native FP8 (remote vLLM): T ${o.usecase_temperatures.usecase_toolcall} / ${o.usecase_temperatures.usecase_bucket}, alarm ${(+o.gate.alarm_if_p_block_at_least).toFixed(4)}` }));
+  return out;
+}
 function modelItem(m, st) {
   if (m.broken) return el("div", { class: "item" }, el("div", { class: "title" }, m.name, el("span", { class: "vbadge fail", text: "broken" })), el("div", { class: "hint", text: m.broken }),
     el("div", { class: "row" }, el("button", { class: "small danger", text: "Remove", onclick: () => removeModel(m.name) })));
@@ -511,8 +671,7 @@ function modelItem(m, st) {
     el("div", { class: "title" }, m.name, el("span", { class: "vbadge", text: m.format }), active ? el("span", { class: "vbadge pass", text: "active" }) : null,
       fb ? el("span", { class: "vbadge fail", text: "local: FP8→bf16 fallback" }) : null),
     el("div", { class: "meta" }, el("span", {}, "weights ", el("b", { text: short(m.weights_sha256) + "…" })), el("span", {}, "size ", el("b", { text: fmtBytes(m.weights_bytes) })),
-      el("span", {}, "T tool/bucket ", el("b", { text: `${m.openone.usecase_temperatures.usecase_toolcall} / ${m.openone.usecase_temperatures.usecase_bucket}` })),
-      el("span", {}, "auto-run/alarm ", el("b", { text: `${m.openone.gate.auto_run_if_p_allow_at_least} / ${(+m.openone.gate.alarm_if_p_block_at_least).toFixed(4)}` })),
+      ...modelNumbers(m, fb),
       m.prompt_code.matches_app ? null : el("span", { class: "warn", text: "package prompt code differs from the app's (" + m.prompt_code.differs.join(", ") + ")" })),
     m.status ? el("div", { class: "hint", text: "Status: " + m.status }) : null,
     fb ? el("div", { class: "callout", text: st.fallback_warning }) : null,
@@ -578,9 +737,11 @@ function renderSettingsLists(st) {
     st.hardware ? null : el("button", { class: "small", text: "Detect hardware to list runtimes", onclick: async () => { await api("/api/hardware", {}); refreshStatus(); } }),
     avail.length ? el("div", { class: "row wrap" }, "Install:", avail.map((v) => el("button", { class: "small", text: v, onclick: () => installRuntime(v, $("sRuntimes")) }))) : null));
   $("sHistory").checked = !!st.save_history;
+  $("sTheme").value = st.theme || "system";
   $("sAbout").textContent = `OpenOne app ${st.app_version} · data folder ${st.data_dir}`;
 }
 $("sHistory").addEventListener("change", (e) => api("/api/settings", { save_history: e.target.checked }));
+$("sTheme").addEventListener("change", async (e) => { applyTheme(e.target.value); await api("/api/settings", { theme: e.target.value }); S.status.theme = e.target.value; });
 $("sOpenData").addEventListener("click", () => api("/api/open", { what: "data" }));
 $("sOnboard").addEventListener("click", () => openOnboarding());
 $("sImport").addEventListener("click", () => importDialog(clear($("sModels"))));
