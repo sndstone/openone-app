@@ -29,9 +29,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { runner: macos-14, arch: arm64 }
-          - { runner: macos-13, arch: x64, intel: true }
+        # the Intel entry is only scheduled when asked for (macos-13 is retired; macos-15-intel is the last Intel image)
+        include: ${{ fromJSON(inputs.intel_mac && '[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-15-intel","arch":"x64","intel":true}]' || '[{"runner":"macos-14","arch":"arm64"}]') }}
     runs-on: ${{ matrix.runner }}
     env:
       HAS_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
