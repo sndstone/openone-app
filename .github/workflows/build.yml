@@ -27,6 +27,7 @@ jobs:
   macos:
     needs: test-core
     strategy:
+      fail-fast: false
       matrix:
         include:
           - { runner: macos-14, arch: arm64 }
@@ -62,13 +63,19 @@ jobs:
           chmod +x packaging/macos/build.sh
           packaging/macos/build.sh --python python
           if [ "${{ inputs.offline }}" = "true" ] && [ "${{ matrix.arch }}" = "arm64" ]; then packaging/macos/build.sh --python python --offline; fi
-      - name: Inference smoke test (tiny model, MPS if the runner exposes it)
+      - name: Inference smoke test (tiny model, CPU)
         if: ${{ !matrix.intel }}
         run: |
           python -m venv /tmp/rt
           /tmp/rt/bin/pip install -q torch==2.14.1 transformers==5.20.2 safetensors==0.8.0 tokenizers==0.23.3 huggingface_hub==2.2.0 jsonschema==4.26.0
           /tmp/rt/bin/python -c "import torch; print('torch', torch.__version__, 'mps', torch.backends.mps.is_available())"
-          /tmp/rt/bin/python tests/tiny_model_smoke.py --hf-repo Mapika/decider-2b --device auto
+          /tmp/rt/bin/python tests/tiny_model_smoke.py --hf-repo Mapika/decider-2b --device cpu
+      # Hosted macOS runners are VMs: torch reports MPS, but allocations fail ("MPS backend out of memory" with 0 bytes
+      # allocated). Informational only; MPS needs a real Mac.
+      - name: Inference smoke test (tiny model, MPS; informational)
+        if: ${{ !matrix.intel }}
+        continue-on-error: true
+        run: /tmp/rt/bin/python tests/tiny_model_smoke.py --hf-repo Mapika/decider-2b --device mps
       - uses: actions/upload-artifact@v4
         if: ${{ !matrix.intel || inputs.intel_mac }}
         with:
