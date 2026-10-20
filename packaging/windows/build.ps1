@@ -38,7 +38,7 @@ New-Item -ItemType Directory $tmp | Out-Null
 $env:OPENONE_DATA_DIR = $tmp
 $p = Start-Process -FilePath dist\OpenOne\OpenOne.exe -ArgumentList "--serve","0" -PassThru
 try {
-  for ($i = 0; $i -lt 60 -and -not (Test-Path "$tmp\serve-url.txt"); $i++) { Start-Sleep -Milliseconds 500 }
+  for ($i = 0; $i -lt 240 -and -not (Test-Path "$tmp\serve-url.txt"); $i++) { Start-Sleep -Milliseconds 500 }
   $url = (Get-Content "$tmp\serve-url.txt" -Raw).Trim()
   $tok = ($url -split '\?t=')[1]
   $base = ($url -split '/\?')[0]

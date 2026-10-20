@@ -51,7 +51,8 @@ done
 # 4. smoke test: the frozen app starts headless and answers /api/status
 TMPD=$(mktemp -d)
 OPENONE_DATA_DIR="$TMPD" "$APP/Contents/MacOS/OpenOne" --serve 0 & PID=$!
-for _ in $(seq 1 60); do [ -s "$TMPD/serve-url.txt" ] && break; sleep 0.5; done
+# a first start on a slow (Intel) CI runner can take over 30 s
+for _ in $(seq 1 240); do [ -s "$TMPD/serve-url.txt" ] && break; sleep 0.5; done
 URL=$(cat "$TMPD/serve-url.txt"); TOK=${URL#*t=}; BASE=${URL%%/\?*}
 curl -fsS -H "X-OpenOne-Token: $TOK" "$BASE/api/status" | grep -q '"app_version": "'$VERSION'"'
 kill $PID; rm -rf "$TMPD"
