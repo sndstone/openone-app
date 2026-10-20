@@ -25,7 +25,9 @@ class LocalWorker:
     kind = "local"
 
     def __init__(self, python_exe, log_path, on_event=None):
-        self.python_exe = str(Path(python_exe).resolve())
+        # absolute, but not resolved: a venv's bin/python is a symlink to the base interpreter, and following it
+        # would drop the venv's packages (torch, transformers)
+        self.python_exe = os.path.abspath(python_exe)
         self.log_path = Path(log_path)
         self.on_event = on_event or (lambda e: None)
         self.proc = None

@@ -359,3 +359,13 @@ def test_no_start_during_import_and_replace_stops_starting_backend(tmp_path, mon
     job = c.import_model(str(src), replace=True)
     job.thread.join(10)
     assert job.state == "done" and c._gen > gen and c.backend_state["state"] == "stopped"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinked venv interpreters are a POSIX thing")
+def test_worker_keeps_venv_interpreter_symlink(tmp_path):
+    # a venv's bin/python links to the base interpreter; resolving it would lose the venv's site-packages
+    from openone_app.backends import LocalWorker
+    link = tmp_path / "venv" / "bin" / "python"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(sys.executable)
+    assert LocalWorker(str(link), tmp_path / "w.log").python_exe == str(link)

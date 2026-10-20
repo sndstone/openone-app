@@ -66,7 +66,7 @@ def build_routes(c: Controller, ui):
         return {"ok": True}
 
     def runtime_custom(b, _q):
-        py = str(Path(_need(b, "python")[0].strip()).resolve())
+        py = os.path.abspath(_need(b, "python")[0].strip())            # not resolve(): keep venv symlinks
         if not Path(py).is_file():
             raise ApiError(400, f"{py} does not exist")
         info = c.test_python(py)
