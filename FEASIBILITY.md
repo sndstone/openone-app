@@ -44,7 +44,7 @@ Notes:
 | Windows, any PC | bf16 | local CPU | works, ~0.8 s/decision (tested) |
 | Windows, Intel Arc | bf16 | local XPU | works, ~0.12 s/decision (tested) |
 | Windows, NVIDIA | bf16 | local CUDA | expected to work like the Linux CUDA test; not tested on Windows |
-| macOS, Apple Silicon | bf16 | local MPS | expected to work; built, not tested |
+| macOS, Apple Silicon | bf16 | local MPS | expected to work; built and CPU-smoke-tested in CI, MPS not tested |
 | macOS, Intel | bf16 | local CPU | expected to work (slow); optional build |
 | Any OS | FP8 | remote vLLM gate service on a Linux NVIDIA box | works (tested against ai-cluster, see README) |
 | Any OS | bf16 | remote gate service | works, but then use the vLLM-fitted numbers (the server reports what it applies) |

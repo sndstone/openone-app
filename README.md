@@ -11,7 +11,7 @@ Feasibility findings and measurements are in [FEASIBILITY.md](FEASIBILITY.md).
 
 ## Getting the app and the model
 - **App:** the installers are on the [v0.1.0 release](https://github.com/sndstone/openone-app/releases/tag/v0.1.0)
-  (Windows; unsigned). macOS builds come from the CI workflow.
+  (Windows and macOS Apple Silicon; unsigned). The macOS dmg is built by the CI workflow.
 - **Model:** the packages are on the [model-v9-r16 release](https://github.com/sndstone/openone-app/releases/tag/model-v9-r16).
   GitHub limits release files to 2 GiB, so each zip is split into parts. Join the parts, check the hash, then import the
   zip in the app:
@@ -128,7 +128,8 @@ The app then uses `http://127.0.0.1:8130`. Not tested here (this PC has no NVIDI
 Details:
 - **Windows.** The build needs Python 3.12 and Inno Setup 6. `build.ps1` finds `ISCC.exe` in `_tools\innosetup`,
   Program Files or LocalAppData.
-- **macOS.** No Mac was available, so these scripts have not been run. Builds are ad-hoc signed unless you set
+- **macOS.** The scripts run in CI on GitHub's macOS 14 arm64 runner (2026-10-20); no physical Mac was used. Builds
+  are ad-hoc signed unless you set
   `MACOS_SIGN_IDENTITY` (and `NOTARY_PROFILE` for notarization).
   - Unsigned: right-click → Open on first launch, or run `xattr -dr com.apple.quarantine /Applications/OpenOne.app`.
   - Intel Macs: the app builds, but PyTorch no longer ships Intel-Mac wheels, so it runs with the remote backend only.
@@ -137,7 +138,8 @@ Details:
   - the core unit tests;
   - both builds;
   - an inference smoke test with a tiny random Qwen3.5 model and the public base-model tokenizer, so CI never
-    downloads the 3.8 GB weights. On the macOS runner it uses MPS if the runner exposes it.
+    downloads the 3.8 GB weights. On macOS it runs on CPU; an MPS attempt is informational only, because hosted
+    macOS runners are VMs whose MPS device cannot allocate memory.
 - **Publishing.** Installers go on a `vX.Y.Z` release, model packages on a separate `model-…` release, so app
   releases don't re-upload weights. Weights are never committed to the repo (`.gitignore`); Git LFS was not used
   because its free quota is far below what public clones of 3.8 GB would need.
@@ -172,7 +174,8 @@ The uninstaller asks before deleting it.
 | Windows 11, offline installer (CPU runtime bundled) | **tested**: installed silently, then bundled runtime found → bf16 import → start in 15 s → valid decision (~0.9 s on CPU) → uninstalled. |
 | Windows 11 → remote gate service (FP8, vLLM 0.31, RTX 4060 Ti on ai-cluster, port 8130) | **tested end to end**. ~63 ms per decision over the LAN. |
 | Windows + NVIDIA CUDA runtime | **built, not tested**: this PC has no NVIDIA GPU. The same torch path was checked on Linux CUDA. |
-| macOS Apple Silicon (MPS) | **scripts written, not run** (no Mac). The tiny-model CI test will exercise it. |
+| macOS Apple Silicon, CI runner (macOS 14 arm64 VM) | **built and smoke-tested in CI**: the app bundle starts and serves, the dmg is made, and the worker → prompt → scoring → validation path passes on CPU (bf16 and FP8 fallback, tiny model). |
+| macOS Apple Silicon, MPS, real model | **not tested**: needs a physical Mac (the CI VM's MPS can't allocate memory). |
 | macOS Intel | remote backend only (no current torch wheels) |
 | Windows + Docker/WSL2 FP8 | documented, not tested |
 
