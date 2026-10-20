@@ -1,0 +1,26 @@
+{
+  "_doc": "Serving numbers for FP8 packages run in bf16 (dequantized) on hardware without FP8. Key: sha256 of the FP8 package's model.safetensors. 'fitted': the dequantized variant's own numbers (written into the fallback's openone.json). 'pending': the app uses the bf16 package's openone.json numbers (an installed bf16 package with the matching weights wins over the embedded copy below) and marks them provisional.",
+  "dequantized_fp8": {
+    "085b0834751a20ff2abf6389f605ce38e0634e7825f8623d9cc45a72f86cdd8e": {
+      "name": "openone-decider-v9-r16-fp8 (gqf8k6) dequantized to bf16",
+      "source_bf16_weights_sha256": "6352dc26ab6d4a0afd60114448f7dcb1fe3ab38a86f200c886969ae598ed7b26",
+      "dequantized_weights_sha256": "a14fc5313deade966ed531ffd9131164efd284e085c4844a2e2c27820c1aba3d",
+      "status": "fitted",
+      "openone": {
+        "runtime": "bf16 (dequantized from FP8)",
+        "fitted_under": "vLLM bf16",
+        "fitted": "2026-10-20",
+        "usecase_temperatures": {"usecase_bucket": 1.34, "usecase_toolcall": 1.28},
+        "gate": {"auto_run_if_p_allow_at_least": 0.80, "alarm_if_p_block_at_least": 0.4133},
+        "quality_vs_bf16": "real-traffic mean |dp| vs bf16 0.0065-0.0078 (true FP8 0.011-0.015); about half of FP8's argmax flips; false alarms bf16 108 / fallback 114 / FP8 120; block leaks bf16 10 / fallback 11 / FP8 9 of 1,089"
+      }
+    }
+  },
+  "bf16_openone_by_weights_sha256": {
+    "6352dc26ab6d4a0afd60114448f7dcb1fe3ab38a86f200c886969ae598ed7b26": {
+      "name": "openone-decider-v9-r16-bf16",
+      "usecase_temperatures": {"usecase_bucket": 1.34, "usecase_toolcall": 1.28},
+      "gate": {"auto_run_if_p_allow_at_least": 0.8, "alarm_if_p_block_at_least": 0.4532229741804979}
+    }
+  }
+}

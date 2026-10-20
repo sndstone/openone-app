@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenOne</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="icon.svg" alt="" class="logo"><span>OpenOne</span></div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="gate" class="active">Tool-call gate</button>
+    <button data-tab="bucket">Buckets</button>
+    <button data-tab="editor" class="adv">JSON editor</button>
+    <button data-tab="batch" class="adv">Batch</button>
+    <button data-tab="tuning" class="adv">Tuning</button>
+    <button data-tab="settings">Settings</button>
+    <button data-tab="logs">Logs &amp; feedback</button>
+  </nav>
+  <div class="topright">
+    <label class="switch" title="Advanced mode shows the JSON editor, batch scoring, tuning and raw mode">
+      <input type="checkbox" id="advToggle"><span>Advanced</span>
+    </label>
+    <div id="modelBadge" class="badge muted">no model</div>
+    <div id="backendPill" class="pill">stopped</div>
+  </div>
+</header>
+<div id="banner" class="banner hidden"></div>
+
+<main>
+  <!-- ======================================================== Tool-call gate -->
+  <section id="tab-gate" class="tab active">
+    <div class="split">
+      <div class="panel">
+        <div class="panel-head"><h2>Tool-call gate</h2>
+          <select id="gatePreset" class="preset"><option value="">Synthetic examples…</option></select></div>
+        <div class="grid3">
+          <label>Agent<select id="gAgent"><option value="claude-code">Claude Code</option><option value="codex">Codex</option><option value="opencode">OpenCode</option></select></label>
+          <label>OS<select id="gOs"><option value="windows">Windows</option><option value="linux">Linux</option><option value="macos">macOS</option></select></label>
+          <label>Shell<select id="gShell"><option value="powershell">PowerShell</option><option value="cmd">cmd</option><option value="git-bash">Git Bash</option><option value="bash">bash</option><option value="sh">sh</option><option value="zsh">zsh</option></select></label>
+        </div>
+        <div class="grid2">
+          <label>Tool<input id="gTool" placeholder="Bash, PowerShell, shell, Write, Edit, …"></label>
+          <label>Workspace root<input id="gRoot" placeholder="C:\work\demo-app"></label>
+        </div>
+        <label>Command or tool input <span class="hint">a shell command, or a JSON object for structured tools (Write, Edit, MCP…)</span>
+          <textarea id="gInput" rows="5" spellcheck="false" class="mono" placeholder="npm test"></textarea></label>
+        <label>User task <span class="hint">optional, recommended: the user's latest instruction</span>
+          <textarea id="gTask" rows="2" placeholder="Run the unit tests and fix any failures"></textarea></label>
+        <details class="adv-only"><summary>Context (optional JSON object)</summary>
+          <textarea id="gContext" rows="3" spellcheck="false" class="mono" placeholder='{"recent_output": "..."}'></textarea></details>
+        <div class="actions"><button id="gRun" class="primary">Decide</button><span class="kbd">Ctrl+Enter</span><span id="gMsg" class="msg"></span></div>
+      </div>
+      <div class="panel result" id="gateResult"><div class="empty">The verdict appears here.</div></div>
+    </div>
+  </section>
+
+  <!-- ======================================================== Buckets -->
+  <section id="tab-bucket" class="tab">
+    <div class="split">
+      <div class="panel">
+        <div class="panel-head"><h2>Bucket classifier</h2>
+          <select id="bucketPreset" class="preset"><option value="">Synthetic examples…</option></select></div>
+        <label>Text or JSON document<textarea id="bText" rows="5" placeholder="I was charged twice this month and want a refund"></textarea></label>
+        <label>Instructions<input id="bInstr"></label>
+        <div class="buckets-head"><h3>Buckets</h3><button id="bAdd" class="small">+ Add bucket</button></div>
+        <div id="bList" class="bucket-list"></div>
+        <div class="actions"><button id="bRun" class="primary">Classify</button><span class="kbd">Ctrl+Enter</span><span id="bMsg" class="msg"></span></div>
+      </div>
+      <div class="panel result" id="bucketResult"><div class="empty">Probabilities per bucket appear here.</div></div>
+    </div>
+  </section>
+
+  <!-- ======================================================== JSON editor -->
+  <section id="tab-editor" class="tab">
+    <div class="split">
+      <div class="panel">
+        <div class="panel-head"><h2>Request JSON</h2>
+          <div class="row"><select id="eTemplate" class="preset"><option value="">Start from…</option><option value="gate">Tool-call gate request</option><option value="bucket">Bucket request</option><option value="multi">Two questions, one state</option></select>
+          <span id="eBadge" class="vbadge">–</span></div></div>
+        <div class="editor"><pre id="eGutter" class="gutter"></pre><textarea id="eText" spellcheck="false" wrap="off"></textarea></div>
+        <ul id="eErrors" class="errors"></ul>
+        <div class="actions"><button id="eRun" class="primary">Score</button><label class="inline"><input type="checkbox" id="eRaw" checked> raw mode</label>
+          <button id="eFormat" class="small">Format</button><span class="kbd">Ctrl+Enter</span><span id="eMsg" class="msg"></span></div>
+      </div>
+      <div class="panel result" id="editorResult"><div class="empty">Score a request to see the parsed answer, the raw JSON and the raw model view.</div></div>
+    </div>
+  </section>
+
+  <!-- ======================================================== Batch -->
+  <section id="tab-batch" class="tab">
+    <div class="panel">
+      <div class="panel-head"><h2>Batch scoring (JSONL)</h2></div>
+      <p class="hint">One JSON object per line: a full request <code>{"state", "questions"}</code> or an eval row <code>{"id", "state", "question", "expected"}</code>. Optional <code>"id"</code> and <code>"expected"</code> (a label, or <code>{question id: label}</code>) give accuracy.</p>
+      <div class="row wrap">
+        <input type="file" id="batchFile" accept=".jsonl,.json,.txt">
+        <span class="or">or path</span><input id="batchPath" class="grow" placeholder="C:\data\requests.jsonl">
+        <button id="batchBrowse" class="small native-only">Browse…</button>
+        <button id="batchRun" class="primary">Run batch</button><button id="batchCancel" class="small hidden">Cancel</button>
+      </div>
+      <div id="batchProgress"></div>
+      <div id="batchSummary"></div>
+    </div>
+  </section>
+
+  <!-- ======================================================== Tuning -->
+  <section id="tab-tuning" class="tab">
+    <div class="split">
+      <div class="panel">
+        <div class="panel-head"><h2>Temperatures and thresholds</h2><button id="tReset" class="small">Reset to package defaults</button></div>
+        <p class="hint" id="tSource"></p>
+        <div class="grid2" id="tFields"></div>
+        <div class="actions"><button id="tSave" class="primary">Apply</button><span id="tMsg" class="msg"></span></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Gate policy texts</h2><button id="pReset" class="small">Reset to defaults</button></div>
+        <p class="hint">The policy lives in the three option descriptions. The published numbers only hold for the default wording.</p>
+        <label>allow<textarea id="pAllow" rows="5"></textarea></label>
+        <label>ask<textarea id="pAsk" rows="5"></textarea></label>
+        <label>block<textarea id="pBlock" rows="6"></textarea></label>
+        <div class="actions"><button id="pSave" class="primary">Save policy</button><span id="pMsg" class="msg"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== Settings -->
+  <section id="tab-settings" class="tab">
+    <div class="split">
+      <div class="panel">
+        <div class="panel-head"><h2>Backend</h2></div>
+        <div id="sBackend"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Models</h2><button id="sImport" class="small">Import package…</button></div>
+        <div id="sModels"></div>
+        <div class="panel-head"><h2>Runtimes</h2></div>
+        <div id="sRuntimes"></div>
+        <div class="panel-head"><h2>App</h2></div>
+        <label class="inline"><input type="checkbox" id="sHistory"> Save every decision to logs/decisions.jsonl (off by default; it stores your commands)</label>
+        <div class="row"><button id="sOpenData" class="small">Open data folder</button><button id="sOnboard" class="small">Run onboarding again</button></div>
+        <p class="hint" id="sAbout"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== Logs & feedback -->
+  <section id="tab-logs" class="tab">
+    <div class="split">
+      <div class="panel">
+        <div class="panel-head"><h2>Logs</h2>
+          <div class="row"><select id="lName"><option>app.log</option><option>worker.log</option><option>runtime.log</option></select>
+          <button id="lRefresh" class="small">Refresh</button><button id="lOpen" class="small">Open folder</button></div></div>
+        <pre id="lText" class="log"></pre>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Feedback</h2>
+          <div class="row"><button id="fExport" class="small primary">Export feedback…</button><button id="fClear" class="small">Clear</button></div></div>
+        <p class="hint">Responses that fail validation are logged here automatically, and so are your manual reports. The export is a zip with the requests and responses; review it before sending it to the model team.</p>
+        <div id="fList"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ======================================================== Onboarding -->
+<div id="onboard" class="overlay hidden">
+  <div class="wizard">
+    <ol class="steps" id="obSteps"><li>Welcome</li><li>Hardware</li><li>Model</li><li>Backend</li><li>Test</li></ol>
+    <div id="obBody" class="ob-body"></div>
+    <div class="ob-foot"><button id="obBack" class="small">Back</button><span class="grow"></span><button id="obSkip" class="small">Skip setup</button><button id="obNext" class="primary">Next</button></div>
+  </div>
+</div>
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

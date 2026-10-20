@@ -1,0 +1,107 @@
+# Builds the OpenOne desktop app for macOS and Windows. Manual trigger only; results are uploaded as workflow
+# artifacts (kept 14 days); releases are published by hand. No model weights are involved: the inference smoke test
+# uses a tiny randomly initialised model with the public base-model tokenizer.
+name: build
+on:
+  workflow_dispatch:
+    inputs:
+      offline:
+        description: "Also build installers with a bundled inference runtime"
+        type: boolean
+        default: false
+      intel_mac:
+        description: "Also build for Intel Macs (remote backend only)"
+        type: boolean
+        default: false
+
+jobs:
+  test-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install jsonschema==4.26.0 pytest
+      - run: python -m pytest tests/test_core.py -q
+
+  macos:
+    needs: test-core
+    strategy:
+      matrix:
+        include:
+          - { runner: macos-14, arch: arm64 }
+          - { runner: macos-13, arch: x64, intel: true }
+    runs-on: ${{ matrix.runner }}
+    env:
+      HAS_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: ${{ !matrix.intel || inputs.intel_mac }}
+      - uses: actions/setup-python@v5
+        if: ${{ !matrix.intel || inputs.intel_mac }}
+        with: { python-version: "3.12" }
+      - name: Import signing certificate (only if secrets are configured)
+        if: ${{ (!matrix.intel || inputs.intel_mac) && env.HAS_CERT == 'true' }}
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KC=$RUNNER_TEMP/build.keychain; PW=$(uuidgen)
+          echo "$MACOS_CERT_P12" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security create-keychain -p "$PW" $KC && security set-keychain-settings -lut 21600 $KC
+          security unlock-keychain -p "$PW" $KC
+          security import $RUNNER_TEMP/cert.p12 -P "$MACOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k $KC
+          security list-keychains -d user -s $KC
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$PW" $KC
+          rm $RUNNER_TEMP/cert.p12
+      - name: Build app and dmg
+        if: ${{ !matrix.intel || inputs.intel_mac }}
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          chmod +x packaging/macos/build.sh
+          packaging/macos/build.sh --python python
+          if [ "${{ inputs.offline }}" = "true" ] && [ "${{ matrix.arch }}" = "arm64" ]; then packaging/macos/build.sh --python python --offline; fi
+      - name: Inference smoke test (tiny model, MPS if the runner exposes it)
+        if: ${{ !matrix.intel }}
+        run: |
+          python -m venv /tmp/rt
+          /tmp/rt/bin/pip install -q torch==2.14.1 transformers==5.20.2 safetensors==0.8.0 tokenizers==0.23.3 huggingface_hub==2.2.0 jsonschema==4.26.0
+          /tmp/rt/bin/python -c "import torch; print('torch', torch.__version__, 'mps', torch.backends.mps.is_available())"
+          /tmp/rt/bin/python tests/tiny_model_smoke.py --hf-repo Mapika/decider-2b --device auto
+      - uses: actions/upload-artifact@v4
+        if: ${{ !matrix.intel || inputs.intel_mac }}
+        with:
+          name: OpenOne-macos-${{ matrix.arch }}
+          path: release/
+          retention-days: 14
+
+  windows:
+    needs: test-core
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Build installer and portable zip
+        shell: pwsh
+        run: |
+          $a = @("-Python", "python", "-Iscc", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")
+          if ("${{ inputs.offline }}" -eq "true") { $a += "-Offline" }
+          powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1 @a
+      - name: Inference smoke test (tiny model, CPU)
+        shell: pwsh
+        run: |
+          python -m venv rt
+          rt\Scripts\pip install -q torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          rt\Scripts\pip install -q transformers==5.20.2 safetensors==0.8.0 tokenizers==0.23.3 huggingface_hub==2.2.0 jsonschema==4.26.0
+          rt\Scripts\python tests\tiny_model_smoke.py --hf-repo Mapika/decider-2b --device cpu
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenOne-windows-x64
+          path: release/
+          retention-days: 14

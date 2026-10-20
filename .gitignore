@@ -1,0 +1,24 @@
+# private model weights, packages and their extracted copies: never commit
+_model/
+_downloads/
+_ref/
+*.safetensors
+*.zip
+# local test state (contains a gate API key and scored requests)
+_testdata*/
+_installtest/
+_shots/
+feedback.jsonl
+*.key
+# toolchains, venvs and build output
+_venv*/
+.build-venv/
+_tools/
+build/
+dist/
+release/
+__pycache__/
+*.pyc
+packaging/assets/icon.icns
+.pytest_cache/
+_publish/
