@@ -205,13 +205,14 @@ The uninstaller asks before deleting it.
   - the remote backend.
 - `tests/tiny_model_smoke.py`: the inference path without private weights (used by CI).
 - `tests/smoke_worker.py`: the worker + pipeline on a given runtime, device and package.
+- `tests/frozen_check.py`: the built app (`dist/OpenOne`) against a data folder with real packages: bucket file batch, exports, and the FP8 fallback.
 
 ## Tested vs. built (2026-10-20)
 | Platform / backend | Status |
 | --- | --- |
 | Windows 11, Intel Arc B580 (XPU), bf16, app-installed runtime | **tested end to end**. Onboarding → runtime install → import → decisions → batch → feedback. Installer installed, launched in its native window, uninstalled. |
 | Windows 11, Arc B580, FP8 package → bf16 fallback (cached + uncached) | **tested end to end** |
-| Windows 11, Arc B580, bucket file batch (0.2.0) | **tested end to end** with 23 synthetic tickets as CSV, nested JSON and XML: 87 % agreement with the labels, ~60 ms per record; all five export formats checked. |
+| Windows 11, Arc B580, bucket file batch (0.2.0) | **tested end to end** with 23 synthetic tickets as CSV, nested JSON and XML: 87 % agreement with the labels, ~60 ms per record; all five export formats checked. The installed 0.2.0 build also passed `tests/frozen_check.py` (bucket batch + FP8 fallback with its fitted numbers). |
 | Windows 11, CPU, bf16 | **tested** (probe, worker smoke test, tiny-model test). ~0.76 s per gate decision. |
 | Windows 11, offline installer (CPU runtime bundled) | **tested**: installed silently, then bundled runtime found → bf16 import → start in 15 s → valid decision (~0.9 s on CPU) → uninstalled. |
 | Windows 11 → remote gate service (FP8, vLLM 0.31, RTX 4060 Ti on ai-cluster, port 8130) | **tested end to end**. ~63 ms per decision over the LAN. |
@@ -242,5 +243,5 @@ the macOS dmg/app zip (built in CI) and a `SHA256SUMS` file. A local build write
 
 | Version | Changes |
 | --- | --- |
-| 0.2.0 | Bucket file batches (CSV/TSV/JSON/JSONL/XML/text import; sort, filter; CSV/JSON/JSONL/XML/per-bucket ZIP export). Model cards show the numbers the local backend applies (fitted fallback numbers for FP8). Appearance setting. macOS: the worker keeps a venv interpreter's symlink. |
+| 0.2.0 | Bucket file batches (CSV/TSV/JSON/JSONL/XML/text import; sort, filter; CSV/JSON/JSONL/XML/per-bucket ZIP export). Model cards show the numbers the local backend applies (fitted fallback numbers for FP8). Appearance setting. macOS: the worker keeps a venv interpreter's symlink. Installed builds now include the fitted FP8-fallback numbers (missing from the 0.1.0 bundle, so the FP8 fallback failed in an installed 0.1.0 app). |
 | 0.1.0 | First release. |
