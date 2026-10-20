@@ -12,7 +12,7 @@ from pathlib import Path
 from . import paths
 from openone_core import __version__ as CORE_VERSION
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 DEFAULTS = {
     "onboarded": False,
     "active_model": None,
@@ -24,6 +24,8 @@ DEFAULTS = {
     "bucket_accept_at": 0.8,
     "save_history": False,
     "theme": "system",
+    "model_repo": "sndstone/openone-app",  # GitHub repository whose "model-*" releases are offered for download
+    "downloaded": {},                    # zip sha256 -> package name it installed (catalog "installed" status)
 }
 _LOCK = threading.Lock()
 

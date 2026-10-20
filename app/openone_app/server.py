@@ -79,9 +79,25 @@ def build_routes(c: Controller, ui):
         return package.inspect(_need(b, "path")[0])
 
     def models_import(b, _q):
-        if c.jobs.running("import"):
-            raise ApiError(409, "an import is already running")
         return job_view(c.import_model(_need(b, "path")[0], bool(b.get("replace"))))
+
+    def models_catalog(b, _q):
+        try:
+            return c.model_catalog(force=bool(b.get("refresh")))
+        except (OSError, ValueError) as e:
+            raise ApiError(502, f"cannot list the model releases on GitHub: {e}") from None
+
+    def models_download(b, _q):
+        tag, file = _need(b, "tag", "file")
+        try:
+            return job_view(c.download_model(tag, file, replace=bool(b.get("replace")), keep_zip=bool(b.get("keep_zip")),
+                                             repo=b.get("repo")))
+        except OSError as e:
+            raise ApiError(502, f"cannot reach GitHub: {e}") from None
+
+    def models_discard(b, _q):
+        c.discard_download(_need(b, "file")[0])
+        return {"ok": True}
 
     def models_verify(b, _q):
         return job_view(c.verify_model(_need(b, "name")[0]))
@@ -153,7 +169,7 @@ def build_routes(c: Controller, ui):
         return c.validate_text(_need(b, "text")[0], b.get("which", "request"))
 
     def settings_post(b, _q):
-        allowed = {"overrides", "policy", "save_history", "bucket_accept_at", "onboarded", "theme"}
+        allowed = {"overrides", "policy", "save_history", "bucket_accept_at", "onboarded", "theme", "model_repo"}
         patch = {k: v for k, v in b.items() if k in allowed}
         if "overrides" in patch:
             s, _ = c.base_settings()
@@ -167,6 +183,11 @@ def build_routes(c: Controller, ui):
                                     or not all(isinstance(v, str) and v.strip() for v in pol.values())):
                 raise ApiError(400, "policy must have non-empty allow, ask and block texts")
             c.store.settings["policy"] = pol
+        if "model_repo" in patch:
+            from . import modeldl
+            patch["model_repo"] = (patch["model_repo"] or modeldl.DEFAULT_REPO).strip()
+            if not modeldl.REPO_RE.match(patch["model_repo"]):
+                raise ApiError(400, "model_repo must look like owner/name")
         if "theme" in patch and patch["theme"] not in ("system", "light", "dark"):
             raise ApiError(400, "theme must be system, light or dark")
         if "bucket_accept_at" in patch:
@@ -294,6 +315,8 @@ def build_routes(c: Controller, ui):
         ("POST", "/api/runtime/install"): runtime_install, ("POST", "/api/runtime/remove"): runtime_remove,
         ("POST", "/api/runtime/custom"): runtime_custom,
         ("POST", "/api/models/inspect"): models_inspect, ("POST", "/api/models/import"): models_import,
+        ("POST", "/api/models/catalog"): models_catalog, ("POST", "/api/models/download"): models_download,
+        ("POST", "/api/models/discard"): models_discard,
         ("POST", "/api/models/verify"): models_verify, ("POST", "/api/models/remove"): models_remove,
         ("POST", "/api/models/activate"): models_activate, ("POST", "/api/models/dequant"): models_dequant,
         ("POST", "/api/backend/configure"): backend_configure, ("POST", "/api/backend/start"): backend_start,

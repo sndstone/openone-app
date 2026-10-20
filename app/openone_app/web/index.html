@@ -162,13 +162,18 @@
         <div id="sBackend"></div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h2>Models</h2><button id="sImport" class="small">Import package…</button></div>
+        <div class="panel-head"><h2>Models</h2><div class="row"><button id="sDownload" class="small">Download…</button><button id="sImport" class="small">Import package…</button></div></div>
+        <div id="sModelAction"></div>
         <div id="sModels"></div>
         <div class="panel-head"><h2>Runtimes</h2></div>
         <div id="sRuntimes"></div>
         <div class="panel-head"><h2>App</h2></div>
         <label class="inline">Appearance <select id="sTheme"><option value="system">follow the system</option><option value="light">light</option><option value="dark">dark</option></select></label>
         <label class="inline"><input type="checkbox" id="sHistory"> Save every decision to logs/decisions.jsonl (off by default; it stores your commands)</label>
+        <div class="row adv"><label class="grow">Model downloads come from the "model-*" releases of GitHub repository
+          <input id="sRepo" placeholder="owner/name"></label><button id="sRepoSave" class="small">Save</button></div>
+        <p class="hint adv">Only use a repository you trust: downloads are checked against the hashes published in the same
+          release, which proves the files arrived intact, not who published them.</p>
         <div class="row"><button id="sOpenData" class="small">Open data folder</button><button id="sOnboard" class="small">Run onboarding again</button></div>
         <p class="hint" id="sAbout"></p>
       </div>

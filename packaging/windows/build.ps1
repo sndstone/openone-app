@@ -16,7 +16,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 Set-Location $Root
-$Version = "0.2.0"
+$Version = "0.3.0"
 $Venv = Join-Path $Root ".build-venv"
 $Release = Join-Path $Root "release"
 

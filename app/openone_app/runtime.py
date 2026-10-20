@@ -18,7 +18,7 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-from . import paths
+from . import net, paths
 
 PBS_TAG = "20261013"
 PBS = {   # (platform key) -> (file, sha256)
@@ -140,10 +140,10 @@ def recommend(hw):
     else:
         var, why = "cpu", "No supported GPU found: CPU runtime (about 0.8 s per decision on a fast 16-core CPU)."
     fp8_gpu = any(g.get("fp8_capable") for g in nv)
-    pkg = ("bf16", "Import the bf16 package for local use. The FP8 package needs vLLM on Linux; locally it only runs "
+    pkg = ("bf16", "Use the bf16 package locally. The FP8 package needs vLLM on Linux; locally it only runs "
                    "dequantized to bf16 (fallback, no speed gain).")
     if fp8_gpu and sys.platform == "win32":
-        pkg = ("bf16", "Import the bf16 package for local use. Your NVIDIA GPU can run FP8 natively through the gate "
+        pkg = ("bf16", "Use the bf16 package locally. Your NVIDIA GPU can run FP8 natively through the gate "
                        "service in Docker Desktop/WSL2 (remote backend at http://127.0.0.1:8130).")
     return {"runtime": var, "runtime_reason": why, "package": pkg[0], "package_reason": pkg[1],
             "available_runtimes": [v for v, d in VARIANTS.items() if pk in d["platforms"]]}
@@ -175,8 +175,7 @@ def list_runtimes(custom=None):
 
 def _download(url, dest, sha256, progress, cancel):
     h = hashlib.sha256()
-    req = urllib.request.Request(url, headers={"User-Agent": "OpenOne-app"})
-    with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
+    with net.open_url(url, timeout=60) as r, open(dest, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
         done = 0
         while True:

@@ -599,3 +599,227 @@ def test_bb_review3_xml_collections_and_choice():
     assert records.parse(order, record_tag="order")["records"] == [{"@id": "1", "line": [{"sku": "a"}, {"sku": "b"}]}]
     with pytest.raises(records.RecordError):
         records.parse(order, record_tag="nope/line")
+
+
+# ------------------------------------------------------------------------------------------------ model downloads
+from openone_app import modeldl  # noqa: E402
+
+
+class _FakeHTTP:
+    """Serves byte strings by URL, honours Range, can drop the connection once after N bytes."""
+    def __init__(self, blobs, drop_after=None):
+        self.blobs, self.drop_after, self.calls = blobs, dict(drop_after or {}), []
+
+    def open_url(self, url, headers=None, timeout=60):
+        headers = headers or {}
+        self.calls.append((url, headers.get("Range")))
+        data, start = self.blobs[url], 0
+        if headers.get("Range"):
+            start = int(headers["Range"].split("=")[1].rstrip("-"))
+        body, drop = data[start:], self.drop_after.pop(url, None)
+        fake = self
+
+        class R:
+            status = 206 if start else 200
+            pos = 0
+
+            def read(self, n=-1):
+                if drop is not None and self.pos >= drop:
+                    raise ConnectionResetError("dropped")
+                n = len(body) - self.pos if n < 0 else n
+                if drop is not None:
+                    n = min(n, drop - self.pos)
+                b = body[self.pos:self.pos + n]
+                self.pos += len(b)
+                return b
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+        return R()
+
+
+def _entry(data, split):
+    parts = [data[:split], data[split:]]
+    return {"repo": "o/r", "tag": "model-x", "file": "pkg-bf16.zip", "name": "pkg-bf16", "format": "bf16",
+            "sha256": hashlib.sha256(data).hexdigest(), "size": len(data),
+            "parts": [{"name": f"pkg-bf16.zip.00{i}", "url": f"https://x/p{i}", "size": len(b),
+                       "sha256": hashlib.sha256(b).hexdigest()} for i, b in enumerate(parts, 1)]}, parts
+
+
+def test_modeldl_download_resume_and_checks(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(modeldl, "CHUNK", 64 << 10)
+    monkeypatch.setattr(modeldl.time, "sleep", lambda s: None)
+    data = os.urandom(3 << 20)
+    entry, parts = _entry(data, 2 << 20)
+    blobs = {"https://x/p1": parts[0], "https://x/p2": parts[1]}
+
+    # a dropped connection is resumed with a Range request, and the result is byte-identical
+    http = _FakeHTTP(blobs, drop_after={"https://x/p2": 300 << 10})
+    monkeypatch.setattr(modeldl.net, "open_url", http.open_url)
+    out = modeldl.download(entry, tmp_path / "dl", progress=lambda **k: None, cancel=lambda: False, reserve=0)
+    assert out.read_bytes() == data and not (tmp_path / "dl" / "pkg-bf16.zip.download.json").exists()
+    assert ("https://x/p2", f"bytes={300 << 10}-") in http.calls
+
+    # cancel during part 2, then resume: part 1 is not fetched again, part 2 continues from where it stopped
+    out.unlink()
+    seen = {"n": 0}
+
+    def cancel():
+        seen["n"] += 1
+        return seen["n"] > 40
+    http = _FakeHTTP(blobs)
+    monkeypatch.setattr(modeldl.net, "open_url", http.open_url)
+    with pytest.raises(InterruptedError):
+        modeldl.download(entry, tmp_path / "dl", progress=lambda **k: None, cancel=cancel, reserve=0)
+    got = modeldl.partial_bytes(tmp_path / "dl", entry)
+    assert 0 < got < len(data)
+    http = _FakeHTTP(blobs)
+    monkeypatch.setattr(modeldl.net, "open_url", http.open_url)
+    out = modeldl.download(entry, tmp_path / "dl", progress=lambda **k: None, cancel=lambda: False, reserve=0)
+    assert out.read_bytes() == data and all(u != "https://x/p1" for u, _ in http.calls)
+
+    # a corrupt part is rejected (and fetched from scratch next time); a wrong whole-zip hash deletes the file
+    out.unlink()
+    bad = dict(blobs, **{"https://x/p2": b"\0" * len(parts[1])})
+    monkeypatch.setattr(modeldl.net, "open_url", _FakeHTTP(bad).open_url)
+    with pytest.raises(modeldl.DownloadError, match="checksum mismatch"):
+        modeldl.download(entry, tmp_path / "dl", progress=lambda **k: None, cancel=lambda: False, reserve=0)
+    wrong = dict(entry, sha256="0" * 64, parts=[dict(x, sha256=None) for x in entry["parts"]])
+    monkeypatch.setattr(modeldl.net, "open_url", _FakeHTTP(blobs).open_url)
+    with pytest.raises(modeldl.DownloadError, match="was deleted"):
+        modeldl.download(wrong, tmp_path / "dl2", progress=lambda **k: None, cancel=lambda: False, reserve=0)
+    assert not (tmp_path / "dl2" / "pkg-bf16.zip").exists()
+
+    # not enough disk: refused before anything is written
+    monkeypatch.setattr(modeldl.shutil, "disk_usage", lambda p: type("U", (), {"free": 10})())
+    with pytest.raises(modeldl.DownloadError, match="disk space"):
+        modeldl.download(entry, tmp_path / "dl3", progress=lambda **k: None, cancel=lambda: False)
+
+
+def test_modeldl_catalog_parsing(monkeypatch):
+    api = [{"tag_name": "v0.2.0", "assets": []},
+           {"tag_name": "model-a", "name": "Model A", "assets": [
+               {"name": "SHA256SUMS.txt", "size": 1, "browser_download_url": "https://x/sums"},
+               {"name": "SHA256SUMS-parts.txt", "size": 1, "browser_download_url": "https://x/psums"},
+               {"name": "m-bf16.zip.001", "size": 5, "browser_download_url": "https://x/1"},
+               {"name": "m-bf16.zip.002", "size": 3, "browser_download_url": "https://x/2"},
+               {"name": "gap-fp8.zip.001", "size": 5, "browser_download_url": "https://x/g1"},
+               {"name": "gap-fp8.zip.003", "size": 5, "browser_download_url": "https://x/g3"},
+               {"name": "single.zip", "size": 9, "browser_download_url": "https://x/s"}]},
+           {"tag_name": "model-draft", "draft": True, "assets": []}]
+    h = "a" * 64
+    texts = {"https://x/sums": f"{h}  m-bf16.zip\n{h}  gap-fp8.zip\n{h} *single.zip\n{h}  ../evil.zip\nnot a line\n",
+             "https://x/psums": f"{'b' * 64}  m-bf16.zip.001\n"}
+
+    def get(url, limit, headers=None):
+        return json.dumps(api).encode() if "api.github.com" in url else texts[url].encode()
+    monkeypatch.setattr(modeldl, "_get", get)
+    cat = modeldl.catalog("owner/repo")
+    assert [(e["file"], e["size"], len(e["parts"])) for e in cat] == [("m-bf16.zip", 8, 2), ("single.zip", 9, 1)]
+    assert cat[0]["parts"][0]["sha256"] == "b" * 64 and cat[0]["parts"][1]["sha256"] is None
+    with pytest.raises(modeldl.DownloadError):
+        modeldl.catalog("not a repo")
+
+
+
+def test_modeldl_review1_resume_cases(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(modeldl, "CHUNK", 64 << 10)
+    data = os.urandom(3 << 20)
+    entry, parts = _entry(data, 2 << 20)
+    blobs = {"https://x/p1": parts[0], "https://x/p2": parts[1]}
+    dl = tmp_path / "dl"
+    http = _FakeHTTP(blobs)
+    monkeypatch.setattr(modeldl.net, "open_url", http.open_url)
+    out = modeldl.download(entry, dl, progress=lambda **k: None, cancel=lambda: False, reserve=0)
+
+    # a complete zip left behind (install failed): reused after a hash check, nothing fetched
+    http.calls.clear()
+    assert modeldl.partial_bytes(dl, entry) == len(data)
+    assert modeldl.download(entry, dl, progress=lambda **k: None, cancel=lambda: False, reserve=0) == out and not http.calls
+
+    # crash after a part was fully written but before it was marked verified: verified from disk, no empty Range
+    sp = dl / "pkg-bf16.zip.download.json"
+    sp.write_text(json.dumps({"layout": modeldl._layout(entry), "have": {"pkg-bf16.zip.001": len(parts[0])},
+                              "verified": []}))
+    http.calls.clear()
+    assert modeldl.download(entry, dl, progress=lambda **k: None, cancel=lambda: False, reserve=0).read_bytes() == data
+    assert [c[0] for c in http.calls] == ["https://x/p2"]
+
+    # a part marked verified but damaged on disk is fetched again (only that part)
+    with open(out, "r+b") as f:
+        f.seek(10)
+        f.write(b"XXXX")
+    sp.write_text(json.dumps({"layout": modeldl._layout(entry), "have": {"pkg-bf16.zip.001": len(parts[0]),
+                                                                         "pkg-bf16.zip.002": 1000},
+                              "verified": ["pkg-bf16.zip.001"]}))
+    http.calls.clear()
+    assert modeldl.download(entry, dl, progress=lambda **k: None, cancel=lambda: False, reserve=0).read_bytes() == data
+    assert ("https://x/p1", None) in http.calls and ("https://x/p2", "bytes=1000-") in http.calls
+
+    # a state written for a different split is not reused
+    other = dict(entry, parts=[dict(entry["parts"][0], size=1), entry["parts"][1]])
+    sp.write_text(json.dumps({"layout": modeldl._layout(other), "have": {"pkg-bf16.zip.001": 1}, "verified": []}))
+    assert modeldl.partial_bytes(dl, entry) == 0
+
+
+def test_modeldl_catalog_pagination(monkeypatch):
+    pages = {1: [{"tag_name": f"v{i}", "assets": []} for i in range(100)],
+             2: [{"tag_name": "model-old", "assets": [
+                 {"name": "SHA256SUMS.txt", "size": 1, "browser_download_url": "https://x/sums"},
+                 {"name": "m.zip", "size": 4, "browser_download_url": "https://x/m"}]}]}
+
+    def get(url, limit, headers=None):
+        if "api.github.com" in url:
+            return json.dumps(pages[int(url.rsplit("page=", 1)[1])]).encode()
+        return ("c" * 64 + "  m.zip\n").encode()
+    monkeypatch.setattr(modeldl, "_get", get)
+    assert [e["file"] for e in modeldl.catalog("o/r")] == ["m.zip"]
+
+
+def test_jobs_start_exclusive():
+    import threading
+    from openone_app.jobs import Jobs
+    jobs, lock, gate = Jobs(), threading.RLock(), threading.Event()
+    j = jobs.start_exclusive("import", lambda job: gate.wait(5), lock)
+    assert jobs.running("import") is j
+    with pytest.raises(ValueError, match="already running"):
+        jobs.start_exclusive("import", lambda job: None, lock)
+    gate.set()
+    j.thread.join(5)
+    jobs.start_exclusive("import", lambda job: None, lock).thread.join(5)
+
+
+
+def test_download_model_controller(tmp_path, monkeypatch):
+    from openone_app import controller as ctl
+    c = _controller(tmp_path, monkeypatch)
+    src = make_pkg(tmp_path / "src")                      # the "downloaded" package (a folder stands in for the zip)
+    real = package.inspect(src)["name"]
+    entry = {"repo": "o/r", "tag": "model-x", "file": "friendly.zip", "name": "friendly", "format": "bf16",
+             "sha256": "d" * 64, "size": 10, "parts": []}
+    monkeypatch.setattr(ctl.modeldl, "catalog", lambda repo: [dict(entry, repo=repo)])
+    monkeypatch.setattr(ctl.modeldl, "download", lambda e, d, progress, cancel, log: src)
+    c.store.update({"model_repo": "o/r"})
+    with pytest.raises(ValueError, match="model source changed"):
+        c.download_model("model-x", "friendly.zip", repo="someone/else")
+    j = c.download_model("model-x", "friendly.zip", repo="o/r", keep_zip=True)
+    j.thread.join(10)
+    assert j.state == "done", j.error
+    assert j.result["name"] == real and c.store.settings["downloaded"]["d" * 64] == real
+    p = c.model_catalog()["packages"][0]
+    assert p["installed"] and p["installed_as"] == real            # status from what was installed, not the file name
+    with pytest.raises(ValueError, match="already installed"):
+        c.download_model("model-x", "friendly.zip")
+
+    # Stop during the install step is a cancel, not a failure
+    def cancelled_install(*a, **k):
+        raise package.Cancelled()
+    monkeypatch.setattr(ctl.package, "install", cancelled_install)
+    j = c.download_model("model-x", "friendly.zip", replace=True, keep_zip=True)
+    j.thread.join(10)
+    assert j.state == "cancelled"

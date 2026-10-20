@@ -2,7 +2,7 @@
 
 A Windows and macOS app for running and testing the OpenOne decision model locally (or against a remote GPU server).
 It has:
-- onboarding: hardware check, runtime install, model import with SHA256SUMS verification, a test decision;
+- onboarding: hardware check, runtime install, the model package downloaded from GitHub or imported from a file (both verified against SHA256SUMS), a test decision;
 - easy mode: a tool-call gate and a bucket classifier, which also sorts whole files (CSV, TSV, JSON, JSON lines,
   XML, text) into buckets and exports them;
 - advanced mode: a JSON editor with live validation, raw mode, batch JSONL scoring, temperature/threshold/policy tuning;
@@ -14,8 +14,17 @@ Feasibility findings and measurements are in [FEASIBILITY.md](FEASIBILITY.md).
 - **App:** the installers are on the [latest release](https://github.com/sndstone/openone-app/releases/latest)
   (Windows and macOS Apple Silicon; unsigned). The macOS dmg is built by the CI workflow.
 - **Model:** the packages are on the [model-v9-r16 release](https://github.com/sndstone/openone-app/releases/tag/model-v9-r16).
-  GitHub limits release files to 2 GiB, so each zip is split into parts. Join the parts, check the hash, then import the
-  zip in the app:
+  **The app downloads them for you** (onboarding → Model, or Settings → Models → Download…):
+  - It lists every package in the repository's `model-*` releases.
+  - It downloads the parts straight into one zip and checks each part against `SHA256SUMS-parts.txt`.
+  - If interrupted, it resumes where it stopped.
+  - It checks the whole zip against `SHA256SUMS.txt`, then imports it, which checks every file inside against the
+    package's own `SHA256SUMS`. The zip is deleted after the import.
+  - Free disk needed: about twice the package size during the install (3.8 GB zip + 3.8 GB installed copy for bf16).
+  - Advanced mode → Settings → App can point the download at another repository.
+
+  To import by hand instead (for example on a computer without internet), join the parts and check the hash first.
+  GitHub limits release files to 2 GiB, so each zip is split into parts:
 
   ```bash
   # macOS / Linux
@@ -212,6 +221,7 @@ The uninstaller asks before deleting it.
 | --- | --- |
 | Windows 11, Intel Arc B580 (XPU), bf16, app-installed runtime | **tested end to end**. Onboarding → runtime install → import → decisions → batch → feedback. Installer installed, launched in its native window, uninstalled. |
 | Windows 11, Arc B580, FP8 package → bf16 fallback (cached + uncached) | **tested end to end** |
+| Windows 11, Arc B580, model download from GitHub (0.3.0) | **tested end to end** in a fresh data folder: the real 3.77 GB bf16 package (2 parts) downloaded at ~25 MB/s, stopped in part 2, resumed with a Range request, whole-zip hash checked, imported (26 files verified), then a valid decision on XPU. |
 | Windows 11, Arc B580, bucket file batch (0.2.0) | **tested end to end** with 23 synthetic tickets as CSV, nested JSON and XML: 87 % agreement with the labels, ~60 ms per record; all five export formats checked. The installed 0.2.0 build also passed `tests/frozen_check.py` (bucket batch + FP8 fallback with its fitted numbers). |
 | Windows 11, CPU, bf16 | **tested** (probe, worker smoke test, tiny-model test). ~0.76 s per gate decision. |
 | Windows 11, offline installer (CPU runtime bundled) | **tested**: installed silently, then bundled runtime found → bf16 import → start in 15 s → valid decision (~0.9 s on CPU) → uninstalled. |
@@ -243,5 +253,6 @@ the macOS dmg/app zip (built in CI) and a `SHA256SUMS` file. A local build write
 
 | Version | Changes |
 | --- | --- |
+| 0.3.0 | Model packages download from GitHub releases (resumable, every part and the whole zip hash-checked), next to manual import. All downloads (also the inference runtime) use the operating system's trust store (truststore; certifi as fallback): a frozen macOS Python has no CA bundle of its own. |
 | 0.2.0 | Bucket file batches (CSV/TSV/JSON/JSONL/XML/text import; sort, filter; CSV/JSON/JSONL/XML/per-bucket ZIP export). Model cards show the numbers the local backend applies (fitted fallback numbers for FP8). Appearance setting. macOS: the worker keeps a venv interpreter's symlink. Installed builds now include the fitted FP8-fallback numbers (missing from the 0.1.0 bundle, so the FP8 fallback failed in an installed 0.1.0 app). |
 | 0.1.0 | First release. |

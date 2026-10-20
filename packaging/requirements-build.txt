@@ -1,6 +1,8 @@
 # UI process + packaging (no torch: inference runs in a separate runtime)
 pywebview==6.2.1
 jsonschema==4.26.0
+truststore==0.10.5
+certifi==2026.10.19
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8
 pythonnet==3.2.1; sys_platform == "win32"

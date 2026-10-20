@@ -148,6 +148,9 @@ table.grid th { color: var(--muted); position: sticky; top: 0; background: var(-
 .card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .card h4 { margin: 0; font-size: 14px; } .card ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
 .callout { border-left: 3px solid var(--amber); background: var(--panel2); padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+.dlist { display: flex; flex-direction: column; gap: 8px; }
+.dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel2); }
+.dl .t { font-weight: 600; } .dl .meta { color: var(--muted); font-size: 12.5px; } .dl .acts { display: flex; gap: 6px; grid-row: span 2; }
 .callout.info { border-color: var(--accent); } .callout.ok { border-color: var(--green); } .callout.err { border-color: var(--red); }
 .toast { position: fixed; bottom: 18px; right: 18px; background: var(--panel); border: 1px solid var(--line); padding: 10px 14px; border-radius: 9px; box-shadow: 0 6px 24px rgba(0,0,0,.35); max-width: 460px; z-index: 20; }
 .toast.err { border-color: var(--red); }

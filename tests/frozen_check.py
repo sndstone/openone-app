@@ -48,6 +48,8 @@ try:
 
     st = wait_ready()
     print("status", st["app_version"], st["backend"]["state"], st["backend"].get("mode"))
+    cat = api("/api/models/catalog", {"refresh": True})        # https from the frozen app (OS trust store)
+    print("catalog", cat["repo"], [(p["file"], p["size"], p["installed"]) for p in cat["packages"]])
     fp8 = [m for m in st["models"] if m.get("format") == "fp8"]
     if fp8:
         print("fp8 card numbers", fp8[0]["local_settings"]["gate"], fp8[0]["local_settings"]["temperature"])

@@ -11,7 +11,7 @@ from pathlib import Path
 from openone_core import package, pipeline, policy
 from openone_core.schemas import REQUEST_SCHEMA, RESPONSE_SCHEMA
 
-from . import paths, presets, records, runtime
+from . import modeldl, paths, presets, records, runtime
 from .backends import BackendError, LocalWorker, RemoteBackend
 from .jobs import Jobs
 from .store import APP_VERSION, Store
@@ -30,6 +30,7 @@ class Controller:
         self._starting = {}                    # gen -> LocalWorker still loading (killed by stop/supersede)
         self.hardware = None
         self.batches = {}
+        self._catalog = None                   # (time, repo, packages) of the last GitHub model listing
         self._cleanup_temp()
         self.store.log(f"app {APP_VERSION} start, data {paths.data_dir()}")
 
@@ -87,30 +88,98 @@ class Controller:
             if ".tmp-" in d.name or ".partial" in d.name:
                 shutil.rmtree(d, ignore_errors=True)
 
-    def import_model(self, path, replace=False, activate=True):
-        if replace:
-            # a starting backend may be about to load this package: stop it as well (starts are refused until the
-            # import finishes, see start_backend)
-            name = package.inspect(path)["name"]
-            with self._lock:
-                st = self.backend_state
-                hit = (st.get("state") == "starting" or (st.get("model") or {}).get("name") == name
-                       or self.store.settings.get("active_model") == name)
-            if hit:
-                self.stop_backend()
+    def _stop_for_replace(self, name):
+        # a starting backend may be about to load this package: stop it as well (starts are refused until the
+        # import finishes, see start_backend)
+        with self._lock:
+            st = self.backend_state
+            hit = (st.get("state") == "starting" or (st.get("model") or {}).get("name") == name
+                   or self.store.settings.get("active_model") == name)
+        if hit:
+            self.stop_backend()
 
-        def run(job):
-            job.update(stage="verifying", message=Path(path).name)
+    def _install_package(self, job, path, replace, activate):
+        """Runs inside an "import" job (registered exclusively, so no backend can start meanwhile). The package name
+        comes from the archive itself, not from its file name."""
+        job.update(stage="verifying", done=0, total=0, message=Path(path).name)
+        name = package.inspect(path)["name"]
+        if replace:
+            self._stop_for_replace(name)
+        elif self.model(name):
+            raise ValueError(f"{name} is already installed (remove it first, or replace it)")
+        try:
             res = package.install(path, self.models_dir(), replace=replace, cancel=job.cancelled,
                                   progress=lambda d, t, r, i, n: job.update(stage="verifying", done=d, total=t,
                                                                             message=f"{r} ({i}/{n} files)"))
-            info = res["info"]
-            self.store.log(f"imported {info['name']} ({info['format']}), {res['verified']} files verified in {res['seconds']}s")
-            if activate:
-                self.store.update({"active_model": info["name"]})
-            return {k: res[k] for k in ("verified", "skipped", "unverified_docs", "seconds")} | {"name": info["name"],
-                                                                                                    "format": info["format"]}
-        return self.jobs.start("import", run)
+        except package.Cancelled:
+            raise InterruptedError("cancelled") from None   # a stop, reported as such (not as a failure)
+        info = res["info"]
+        self.store.log(f"imported {info['name']} ({info['format']}), {res['verified']} files verified in {res['seconds']}s")
+        if activate:
+            self.store.update({"active_model": info["name"]})
+        return {k: res[k] for k in ("verified", "skipped", "unverified_docs", "seconds")} | {"name": info["name"],
+                                                                                                "format": info["format"]}
+
+    def import_model(self, path, replace=False, activate=True):
+        return self.jobs.start_exclusive("import", lambda job: self._install_package(job, path, replace, activate),
+                                         self._lock)
+
+    # ------------------------------------------------------------------------------------------------ GitHub downloads
+    def model_catalog(self, force=False):
+        """Model packages offered by the configured repository's "model-*" releases (cached for 10 minutes)."""
+        repo = self.store.settings.get("model_repo") or modeldl.DEFAULT_REPO
+        c = self._catalog
+        if force or not c or c[1] != repo or time.time() - c[0] > 600:
+            c = self._catalog = (time.time(), repo, modeldl.catalog(repo))
+        installed = {m["name"] for m in self.models() if "broken" not in m}
+        done = self.store.settings.get("downloaded") or {}
+        dl = paths.sub("downloads")
+        pkgs = []
+        for e in c[2]:
+            # authoritative: this exact zip (by hash) was installed under a name that is still installed; otherwise
+            # the file-name convention (<package>.zip) is a hint, e.g. for a package imported by hand
+            real = done.get(e["sha256"])
+            pkgs.append(e | {"installed": (real in installed) if real else e["name"] in installed,
+                             "installed_as": real if real in installed else None,
+                             "partial_bytes": modeldl.partial_bytes(dl, e)})
+        return {"repo": repo, "packages": pkgs}
+
+    def download_model(self, tag, file, replace=False, activate=True, keep_zip=False, repo=None):
+        """Download a package from GitHub, verify it, import it (a job of kind "import", so the import guards apply).
+        repo: the repository the caller's list came from; refused if the model source changed since."""
+        cat = self.model_catalog()
+        if repo and repo != cat["repo"]:
+            raise ValueError(f"the model source changed to {cat['repo']}; reopen the list")
+        entry = next((e for e in cat["packages"] if e["tag"] == tag and e["file"] == file), None)
+        if entry is None:
+            entry = next((e for e in self.model_catalog(force=True)["packages"] if e["tag"] == tag and e["file"] == file), None)
+        if entry is None:
+            raise ValueError(f"{file} is not offered by {cat['repo']} release {tag}")
+        if entry["installed_as"] and not replace:            # by file name alone the install step decides
+            raise ValueError(f"{entry['installed_as']} is already installed from this package")
+        dl = paths.sub("downloads")
+
+        def run(job):
+            self.store.log(f"downloading {file} from {entry['repo']} {tag} ({entry['size']} bytes, {len(entry['parts'])} part(s))")
+            path = modeldl.download(entry, dl, progress=job.update, cancel=job.cancelled, log=self.store.log)
+            self.store.log(f"downloaded and verified {file} (sha256 {entry['sha256'][:12]}…)")
+            # a failed or cancelled install keeps the verified zip: the next Download installs it without fetching again
+            res = self._install_package(job, path, replace, activate)
+            self.store.update({"downloaded": {entry["sha256"]: res["name"]}})
+            if not keep_zip:
+                path.unlink(missing_ok=True)
+            return res | {"downloaded": file, "sha256": entry["sha256"], "zip_kept": str(path) if keep_zip else None}
+        return self.jobs.start_exclusive("import", run, self._lock)
+
+    def discard_download(self, file):
+        dl = paths.sub("downloads")
+        if not modeldl._SAFE_FILE.match(file or ""):
+            raise ValueError("bad file name")
+        with self._lock:
+            if self.jobs.running("import"):
+                raise ValueError("an import or download is running")
+            for p in (dl / file, dl / (file + ".download.json")):
+                p.unlink(missing_ok=True)
 
     def verify_model(self, name):
         m = self.model(name)
@@ -197,10 +266,11 @@ class Controller:
         self._detach({"state": "stopped"})
 
     def start_backend(self):
-        if self.jobs.running("import"):
-            raise ValueError("a model import is running; start the model after it finishes")
         b = dict(self.store.settings["backend"])
-        gen = self._detach({"state": "starting", "kind": b["kind"]})
+        with self._lock:                       # imports register under the same lock (Jobs.start_exclusive)
+            if self.jobs.running("import"):
+                raise ValueError("a model import is running; start the model after it finishes")
+            gen = self._detach({"state": "starting", "kind": b["kind"]})
 
         def run(job):
             try:
@@ -610,7 +680,7 @@ class Controller:
                 "policy": s.get("policy") or policy.DEFAULT_POLICY, "default_policy": policy.DEFAULT_POLICY,
                 "gate_instructions": policy.GATE_INSTRUCTIONS, "bucket_instructions": policy.BUCKET_INSTRUCTIONS,
                 "save_history": s.get("save_history"), "bucket_accept_at": s.get("bucket_accept_at"),
-                "theme": s.get("theme") or "system",
+                "theme": s.get("theme") or "system", "model_repo": s.get("model_repo") or modeldl.DEFAULT_REPO,
                 "dequant_cache": s.get("dequant_cache") or {}, "feedback_count": len(self.store.feedback_items()),
                 "jobs": {k: j.view() for k, j in self.jobs.jobs.items() if j.state == "running"},
                 "fallback_warning": policy.FALLBACK_WARNING}

@@ -21,7 +21,6 @@ class Job:
         self._cancel = threading.Event()
         self._on_log = on_log
         self.thread = threading.Thread(target=self._run, args=(fn,), daemon=True)
-        self.thread.start()
 
     def _run(self, fn):
         try:
@@ -68,8 +67,17 @@ class Jobs:
 
     def start(self, kind, fn):
         j = Job(kind, fn, self.on_log)
-        self.jobs[j.id] = j
+        self.jobs[j.id] = j                    # registered before it runs: running() sees it at once
+        j.thread.start()
         return j
+
+    def start_exclusive(self, kind, fn, lock):
+        """Start unless a job of `kind` is running; check and registration happen under `lock` (the controller's
+        lock, which backend starts also take)."""
+        with lock:
+            if self.running(kind):
+                raise ValueError(f"another {kind} is already running")
+            return self.start(kind, fn)
 
     def get(self, jid):
         return self.jobs.get(jid)

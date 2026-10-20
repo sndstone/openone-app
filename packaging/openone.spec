@@ -7,7 +7,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).parent
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 IS_MAC = sys.platform == "darwin"
 
 datas = [
@@ -19,7 +19,8 @@ datas = [
 ]
 datas += collect_data_files("jsonschema_specifications")
 datas += collect_data_files("webview")
-hidden = collect_submodules("openone_core") + collect_submodules("openone_app") + ["jsonschema", "referencing"]
+datas += collect_data_files("certifi")
+hidden = collect_submodules("openone_core") + collect_submodules("openone_app") + ["jsonschema", "referencing", "truststore", "certifi"]
 if IS_MAC:
     hidden += ["webview.platforms.cocoa"]
 else:

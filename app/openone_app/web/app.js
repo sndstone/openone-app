@@ -738,13 +738,23 @@ function renderSettingsLists(st) {
     avail.length ? el("div", { class: "row wrap" }, "Install:", avail.map((v) => el("button", { class: "small", text: v, onclick: () => installRuntime(v, $("sRuntimes")) }))) : null));
   $("sHistory").checked = !!st.save_history;
   $("sTheme").value = st.theme || "system";
+  if (document.activeElement !== $("sRepo")) $("sRepo").value = st.model_repo || "";
   $("sAbout").textContent = `OpenOne app ${st.app_version} · data folder ${st.data_dir}`;
 }
 $("sHistory").addEventListener("change", (e) => api("/api/settings", { save_history: e.target.checked }));
 $("sTheme").addEventListener("change", async (e) => { applyTheme(e.target.value); await api("/api/settings", { theme: e.target.value }); S.status.theme = e.target.value; });
 $("sOpenData").addEventListener("click", () => api("/api/open", { what: "data" }));
 $("sOnboard").addEventListener("click", () => openOnboarding());
-$("sImport").addEventListener("click", () => importDialog(clear($("sModels"))));
+const modelAction = (fn) => { const box = clear($("sModelAction")); box.append(el("div", { class: "row" }, el("span", { class: "grow" }),
+  el("button", { class: "small", text: "Close", onclick: () => clear($("sModelAction")) }))); const inner = el("div", {}); box.append(inner); fn(inner); };
+$("sImport").addEventListener("click", () => modelAction((b) => importDialog(b, () => renderSettings())));
+$("sDownload").addEventListener("click", () => modelAction((b) => downloadPanel(b, () => renderSettings())));
+$("sRepoSave").addEventListener("click", async () => {
+  try {
+    await api("/api/settings", { model_repo: $("sRepo").value.trim() }); await refreshStatus(); toast("Model source saved");
+    if ($("sModelAction").querySelector(".dlist")) modelAction((b) => downloadPanel(b, () => renderSettings()));   // list from the new source
+  } catch (e) { toast(e.message, true); }
+});
 
 async function startBackend(progBox, onDone) {
   let j; try { j = await api("/api/backend/start", {}); } catch (e) { toast(e.message, true); return null; }
@@ -762,6 +772,65 @@ async function installRuntime(variant, progBox, onDone) {
   await refreshStatus();
   if (r && r.state === "done") toast(`Runtime ${variant} installed (torch ${r.result.info.torch})`);
   if (onDone) onDone(r);
+}
+// Model packages offered by the configured GitHub repository's "model-*" releases.
+async function downloadPanel(box, onDone, notice) {
+  const st = S.status, rec = ((st.hardware || {}).recommend) || {};
+  const head = el("p", { class: "hint", text: `Loading the model list from github.com/${st.model_repo}…` });
+  const list = el("div", { class: "dlist" }), prog = el("div", {});
+  box.append(head, list, prog);
+  if (notice) prog.append(notice);
+  const busy = Object.values(st.jobs || {}).find((j) => j.kind === "import");
+  if (busy) { follow(busy.id); }
+  let cat;
+  try { cat = await api("/api/models/catalog", {}); }
+  catch (e) {
+    clear(head).append(el("div", { class: "callout err" }, e.message, " ", el("button", { class: "small", text: "Retry", onclick: () => { clear(box); downloadPanel(box, onDone); } })),
+      el("p", { class: "hint", text: "No internet here? Download the package on another computer and use Import below." }));
+    return;
+  }
+  head.textContent = `From github.com/${cat.repo}. Every part is checked against the release's SHA256SUMS, then every file inside against the package's own SHA256SUMS. The download resumes if it is interrupted.`;
+  if (!cat.packages.length) { list.append(el("div", { class: "callout", text: "This repository has no model releases (tags starting with \"model-\")." })); return; }
+  const wantFp8 = rec.package === "fp8";
+  const pkgs = [...cat.packages].sort((a, b) => (a.format === "bf16" ? 0 : 1) - (b.format === "bf16" ? 0 : 1) || (b.published || "").localeCompare(a.published || ""));
+  for (const p of pkgs) {
+    const recommended = wantFp8 ? p.format === "fp8" : p.format === "bf16";
+    const go = el("button", { class: recommended && !p.installed ? "primary" : "small",
+      text: p.installed ? "Installed" : p.partial_bytes >= p.size ? "Install (already downloaded)"
+        : p.partial_bytes ? `Resume (${fmtBytes(p.partial_bytes)} of ${fmtBytes(p.size)})` : `Download ${fmtBytes(p.size)}`,
+      disabled: p.installed || busy ? true : null, onclick: () => run(p) });
+    const discard = p.partial_bytes && !p.installed && !busy ? el("button", { class: "small danger", text: p.partial_bytes >= p.size ? "Delete download" : "Discard partial", onclick: async () => {
+      try { await api("/api/models/discard", { file: p.file }); clear(box); downloadPanel(box, onDone); } catch (e) { toast(e.message, true); } } }) : null;
+    list.append(el("div", { class: "dl" },
+      el("div", { class: "t" }, p.name, p.installed_as && p.installed_as !== p.name ? ` (installed as ${p.installed_as})` : "", " ", el("span", { class: "vbadge", text: p.format }), recommended ? el("span", { class: "vbadge pass", text: "recommended" }) : null,
+        p.installed ? el("span", { class: "vbadge pass", text: "installed" }) : null),
+      el("div", { class: "acts" }, go, discard),
+      el("div", { class: "meta", text: `${p.release} · ${p.parts.length} part(s) · sha256 ${p.sha256.slice(0, 12)}…` +
+        (p.format === "fp8" ? " · runs natively only in vLLM (remote gate); locally it runs as the bf16 fallback" : "") })));
+  }
+  async function run(p) {
+    list.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    let j;
+    try { j = await api("/api/models/download", { tag: p.tag, file: p.file, repo: p.repo }); }
+    catch (e) { clear(prog).append(el("div", { class: "callout err", text: e.message })); list.querySelectorAll("button").forEach((b) => (b.disabled = b.textContent === "Installed")); return; }
+    await refreshStatus();
+    follow(j.id);
+  }
+  async function follow(id) {
+    list.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    const stop = el("button", { class: "small", text: "Stop (resume later)", onclick: () => api("/api/job/cancel", { id }) });
+    const bar = el("div", {});
+    clear(prog).append(bar, el("div", { class: "row" }, stop));
+    const r = await watchJob(id, (x) => clear(bar).append(progressBar(x)));
+    await refreshStatus();
+    if (!box.isConnected) return;                     // the panel was closed meanwhile
+    const msg = r && r.state === "done"
+      ? el("div", { class: "callout ok", text: `Installed ${r.result.name}: ${r.result.downloaded ? "the package hash matched SHA256SUMS, and " : ""}${r.result.verified} files were verified in the package.` })
+      : r && r.state === "cancelled" ? el("div", { class: "callout", text: "Stopped. Click Resume (or Install) to continue where it left off." })
+      : el("div", { class: "callout err", text: "Failed: " + ((r && r.error) || "unknown error") + ". A finished download is kept; click Install to retry without downloading again." });
+    clear(box); await downloadPanel(box, onDone, msg);
+    if (r && r.state === "done" && onDone) onDone(r);
+  }
 }
 function importDialog(box, onDone) {
   const path = el("input", { class: "grow", placeholder: "C:\\Downloads\\openone-decider-v9-r16-bf16.zip or an extracted folder" });
@@ -863,10 +932,13 @@ async function obHardware(b) {
 }
 function obModel(b) {
   const st = S.status, rec = ((st.hardware || {}).recommend) || {};
-  b.append(el("h2", { text: "Import the model package" }),
-    el("p", { text: rec.package_reason || "Import the bf16 package for local use." }),
-    el("p", { class: "hint", text: "Pick the .zip you received (or its extracted folder). Every file is checked against SHA256SUMS while it is copied into the app's data folder; the original stays where it is." }));
-  if (st.models.length) b.append(el("div", { class: "callout ok", text: "Already imported: " + st.models.map((m) => m.name).join(", ") }));
+  b.append(el("h2", { text: "Get the model package" }),
+    el("p", { text: rec.package_reason || "The bf16 package is the one to use locally." }));
+  if (st.models.length) b.append(el("div", { class: "callout ok", text: "Already installed: " + st.models.map((m) => m.name).join(", ") }));
+  b.append(el("h3", { text: "Download from GitHub" }));
+  const dlBox = el("div", {}); b.append(dlBox);
+  b.append(el("h3", { text: "Or import a file you already have" }),
+    el("p", { class: "hint", text: "The .zip (or its extracted folder). Every file is checked against SHA256SUMS while it is copied into the app's data folder; the original stays where it is." }));
   const box = el("div", {}); b.append(box);
   const fbBox = el("div", {}); b.append(fbBox);
   const showFallback = () => {
@@ -877,10 +949,13 @@ function obModel(b) {
       fbBox.append(el("div", { class: "callout", text: S.status.fallback_warning }),
         el("label", { class: "inline" }, el("input", { type: "radio", name: "dq", checked: keep, onchange: () => setDequant(m.name, true) }), "Cache the dequantized weights (about 3.8 GB on disk, fast later starts)"),
         el("label", { class: "inline" }, el("input", { type: "radio", name: "dq", checked: !keep, onchange: () => setDequant(m.name, false) }), "Dequantize again on every load (no extra disk, ~10 s more per start)"),
-        el("p", { class: "hint", text: "Thresholds for this fallback are provisional: the bf16 package's numbers are used until values fitted for the dequantized FP8 variant are available." }));
+        el("p", { class: "hint", text: (m.local_settings || {}).provisional
+          ? "Thresholds for this fallback are provisional: the bf16 package's numbers are used until values fitted for this dequantized FP8 variant are available."
+          : `This fallback uses its own fitted numbers (alarm at ${((m.local_settings || {}).gate || {}).alarm_at}), fitted under vLLM.` }));
     }
   };
   importDialog(box, () => showFallback()); showFallback();
+  downloadPanel(dlBox, () => showFallback());
 }
 function obBackend(b) {
   const st = S.status;
