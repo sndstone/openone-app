@@ -27,6 +27,10 @@ if ($LASTEXITCODE) { throw "pip install failed" }
 Remove-Item -Recurse -Force dist\OpenOne, build -ErrorAction SilentlyContinue
 & "$Venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --distpath dist --workpath build packaging\openone.spec
 if ($LASTEXITCODE) { throw "PyInstaller failed" }
+# data files the frozen app reads next to its modules
+foreach ($f in @("dist\OpenOne\_internal\openone_core\fallback_settings.json", "dist\OpenOne\_internal\openone_app\web\app.js")) {
+  if (-not (Test-Path $f)) { throw "bundle check: $f is missing" }
+}
 
 # smoke test: the frozen app must start headless and answer /api/status
 $tmp = Join-Path $env:TEMP ("openone-build-test-" + [guid]::NewGuid())

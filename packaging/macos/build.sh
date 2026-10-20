@@ -44,6 +44,10 @@ rm -rf build dist/OpenOne dist/OpenOne.app
 .build-venv/bin/python -m PyInstaller --noconfirm --clean --distpath dist --workpath build packaging/openone.spec
 APP=dist/OpenOne.app
 
+# data files the frozen app reads next to its modules
+for f in openone_core/fallback_settings.json openone_app/web/app.js; do
+  [ -n "$(find dist/OpenOne.app -path "*/$f" -print -quit)" ] || { echo "bundle check: $f is missing" >&2; exit 1; }
+done
 # 4. smoke test: the frozen app starts headless and answers /api/status
 TMPD=$(mktemp -d)
 OPENONE_DATA_DIR="$TMPD" "$APP/Contents/MacOS/OpenOne" --serve 0 & PID=$!

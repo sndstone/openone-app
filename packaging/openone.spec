@@ -14,6 +14,8 @@ datas = [
     (str(ROOT / "app" / "openone_app" / "web"), "openone_app/web"),
     (str(ROOT / "core" / "openone_core"), "core/openone_core"),
     (str(ROOT / "worker" / "openone_worker.py"), "worker"),
+    # read next to the frozen policy module (fitted FP8-fallback numbers)
+    (str(ROOT / "core" / "openone_core" / "fallback_settings.json"), "openone_core"),
 ]
 datas += collect_data_files("jsonschema_specifications")
 datas += collect_data_files("webview")
