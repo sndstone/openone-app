@@ -7,7 +7,8 @@
 #
 # Signing (optional): set MACOS_SIGN_IDENTITY="Developer ID Application: ..." to sign with the hardened runtime, and
 # NOTARY_PROFILE=<notarytool keychain profile> to notarize and staple. Without them the app is ad-hoc signed only:
-# first launch needs right-click > Open (or: xattr -dr com.apple.quarantine /Applications/OpenOne.app).
+# a downloaded copy is quarantined: xattr -dr com.apple.quarantine /Applications/OpenOne.app (or System Settings >
+# Privacy & Security > Open Anyway; right-click > Open no longer works on macOS 15+). A local build is not quarantined.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"

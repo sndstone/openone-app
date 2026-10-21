@@ -179,7 +179,11 @@ Details:
 - **macOS.** The scripts run in CI on GitHub's macOS 14 arm64 runner (2026-10-20); no physical Mac was used. Builds
   are ad-hoc signed unless you set
   `MACOS_SIGN_IDENTITY` (and `NOTARY_PROFILE` for notarization).
-  - Unsigned: right-click → Open on first launch, or run `xattr -dr com.apple.quarantine /Applications/OpenOne.app`.
+  - **Opening the downloaded app:** it is not notarized, so macOS blocks the first launch of a copy downloaded from
+    the release. Copy `OpenOne.app` to Applications, then either run
+    `xattr -dr com.apple.quarantine /Applications/OpenOne.app` in Terminal (works on every version), or try to open it
+    once and click **Open Anyway** in System Settings → Privacy & Security. Right-click → Open no longer skips the
+    check on macOS 15 and later. An app you build yourself with `build.sh` is not quarantined and opens directly.
   - Intel Macs: the app builds, but PyTorch no longer ships Intel-Mac wheels, so it runs with the remote backend only.
 - **Signing.** The Windows installer is unsigned. To sign it, run `signtool` on the exe with your certificate.
 - **CI.** The workflow runs:
